@@ -1,0 +1,99 @@
+openapi: 3.1.0
+info:
+  title: CRMTool Phase 1 API
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+  /v1/events:
+    post:
+      summary: Ingest customer events
+      responses:
+        '202':
+          description: Event accepted, deduplicated, resolved to a profile, and queued for downstream work
+  /v1/segments:
+    post:
+      summary: Create a static or dynamic segment
+      responses:
+        '201':
+          description: Segment created and materialized
+  /v1/segments/{id}:
+    get:
+      summary: Get a segment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Segment details
+  /v1/templates:
+    get:
+      summary: List templates
+      responses:
+        '200':
+          description: Templates for a tenant and optional channel
+    post:
+      summary: Create a message template
+      responses:
+        '201':
+          description: Template created with variables extracted
+  /v1/campaigns:
+    get:
+      summary: List campaigns
+      responses:
+        '200':
+          description: Campaigns for the requested tenant
+    post:
+      summary: Create a campaign
+      responses:
+        '201':
+          description: Campaign draft created
+  /v1/campaigns/{id}/launch:
+    post:
+      summary: Launch a campaign and enqueue/send messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Campaign launched
+  /v1/campaigns/{id}/pause:
+    post:
+      summary: Pause a campaign
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Campaign paused
+  /v1/vendors/test:
+    post:
+      summary: Test a vendor connection
+      responses:
+        '200':
+          description: Vendor health check result
+  /v1/analytics/campaigns/{id}:
+    get:
+      summary: Get campaign delivery analytics
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Campaign metrics
