@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crmtool
+      POSTGRES_USER: crmtool
+      POSTGRES_PASSWORD: crmtool
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/api/db/migrations:/docker-entrypoint-initdb.d:ro
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+  api:
+    image: node:24-alpine
+    working_dir: /workspace
+    command: sh -c "npm install && npm run build --workspace @crmtool/api && node apps/api/dist/main.js"
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgres://crmtool:crmtool@postgres:5432/crmtool
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '3001:3001'
+    volumes:
+      - .:/workspace
+    depends_on:
+      - postgres
+      - redis
+  web:
+    image: node:24-alpine
+    working_dir: /workspace
+    command: sh -c "npm install && npm run build --workspace @crmtool/web"
+    volumes:
+      - .:/workspace
+    depends_on:
+      - api
+  worker:
+    image: node:24-alpine
+    working_dir: /workspace
+    command: sh -c "npm install && npm run build --workspace @crmtool/worker"
+    volumes:
+      - .:/workspace
+    depends_on:
+      - redis
+volumes:
+  postgres_data:

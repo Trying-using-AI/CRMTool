@@ -1,0 +1,16 @@
+{
+  "name": "@crmtool/api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@crmtool/analytics": "0.1.0",
+    "@crmtool/types": "0.1.0",
+    "@crmtool/vendor-core": "0.1.0"
+  }
+}

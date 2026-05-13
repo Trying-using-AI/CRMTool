@@ -1,0 +1,17 @@
+{
+  "name": "crmtool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Modular CRM / customer engagement platform MVP monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @crmtool/types && npm run build --workspace @crmtool/vendor-core && npm run build --workspace @crmtool/analytics && npm run build --workspace @crmtool/api && npm run build --workspace @crmtool/web && npm run build --workspace @crmtool/worker && npm run build --workspace @crmtool/scheduler && npm run build --workspace @crmtool/webhook-consumer",
+    "test": "npm run test --workspace @crmtool/api && npm run test --workspace @crmtool/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --check ."
+  }
+}

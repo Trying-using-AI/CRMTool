@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": ".", "jsx": "react-jsx" },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/node-shims.d.ts"]
+}
