@@ -14,8 +14,8 @@ export class ProfilesService {
       .find(
         (profile) =>
           profile.externalId === input.externalId ||
-          profile.email === input.email ||
-          profile.phone === input.phone,
+          (input.email !== undefined && profile.email === input.email) ||
+          (input.phone !== undefined && profile.phone === input.phone),
       );
     if (existing) {
       return this.profiles.update(existing.id, {

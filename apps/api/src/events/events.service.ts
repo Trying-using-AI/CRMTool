@@ -33,7 +33,9 @@ export class EventsService {
       throw error;
     }
     const hash = this.fingerprint(input);
-    const existing = this.events.find((event) => event.hash === hash);
+    const existing = this.events.find(
+      (event) => event.tenantId === input.tenant_id && event.hash === hash,
+    );
     if (existing) {
       return existing;
     }
@@ -68,14 +70,17 @@ export class EventsService {
   private fingerprint(input: EventIngestionRequest): string {
     return createHash('sha256')
       .update(
-        input.event_id ??
-          JSON.stringify([
-            input.tenant_id,
-            input.external_user_id,
-            input.event_name,
-            input.event_time,
-            input.properties,
-          ]),
+        JSON.stringify(
+          input.event_id
+            ? [input.tenant_id, input.source, input.event_id]
+            : [
+                input.tenant_id,
+                input.external_user_id,
+                input.event_name,
+                input.event_time,
+                input.properties,
+              ],
+        ),
       )
       .digest('hex');
   }

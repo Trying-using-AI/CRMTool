@@ -73,3 +73,51 @@ test('event ingestion deduplicates by explicit event_id', () => {
   assert.equal(app.events.ingest(payload).id, app.events.ingest(payload).id);
   assert.equal(app.events.list('t_123').length, 1);
 });
+
+test('event ingestion creates distinct external-id-only profiles within a tenant', () => {
+  const app = createCrmApplication();
+  const tenantId = 't_123';
+
+  const firstEvent = app.events.ingest({
+    tenant_id: tenantId,
+    external_user_id: 'u_123',
+    event_name: 'login',
+    event_time: '2026-05-13T10:00:00Z',
+    properties: {},
+  });
+  const secondEvent = app.events.ingest({
+    tenant_id: tenantId,
+    external_user_id: 'u_456',
+    event_name: 'login',
+    event_time: '2026-05-13T10:01:00Z',
+    properties: {},
+  });
+
+  assert.equal(firstEvent.profileId === secondEvent.profileId, false);
+  assert.deepEqual(
+    app.profiles.list(tenantId).map((profile) => profile.externalId),
+    ['u_123', 'u_456'],
+  );
+});
+
+test('event ingestion scopes explicit event_id dedupe by tenant and source', () => {
+  const app = createCrmApplication();
+  const payload = {
+    tenant_id: 't_123',
+    external_user_id: 'u_123',
+    event_id: 'evt_1',
+    event_name: 'login',
+    event_time: '2026-05-13T10:00:00Z',
+    properties: {},
+    source: 'mobile',
+  };
+
+  assert.equal(app.events.ingest(payload).id, app.events.ingest(payload).id);
+  assert.equal(
+    app.events.ingest({ ...payload, tenant_id: 't_456', external_user_id: 'u_456' }).tenantId,
+    't_456',
+  );
+  assert.equal(app.events.ingest({ ...payload, source: 'web' }).source, 'web');
+  assert.equal(app.events.list('t_123').length, 2);
+  assert.equal(app.events.list('t_456').length, 1);
+});
