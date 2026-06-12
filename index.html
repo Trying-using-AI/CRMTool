@@ -12,6 +12,37 @@ const SUPA_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIs
 const WORKSPACE = '00000000-0000-0000-0000-000000000001';
 const db = supabase.createClient(SUPA_URL, SUPA_KEY);
 
+// ─── Unique IDs (>=20-char alphanumeric) for deep links ───
+function genUid(){
+  var chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  var out='', buf=new Uint8Array(24);
+  if(window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(buf);
+  else for(var j=0;j<buf.length;j++) buf[j]=Math.floor(Math.random()*256);
+  for(var i=0;i<24;i++) out+=chars[buf[i]%chars.length];
+  return out;
+}
+// Stable uid for built-in demo rows (same on every load)
+function seedUid(shortId){
+  var base='demo'+String(shortId).replace(/[^A-Za-z0-9]/g,'');
+  while(base.length<20) base+='0';
+  return base;
+}
+// 32-char alphanumeric uid derived from a Supabase UUID (stable across devices)
+function dbUid(uuid){ return String(uuid).replace(/-/g,''); }
+function ensureUid(item){
+  if(!item.uid){
+    var id=String(item.id||'');
+    if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) item.uid=dbUid(id);
+    else if(id && id.charAt(0)!=='_') item.uid=seedUid(id);
+    else item.uid=genUid();
+  }
+  return item.uid;
+}
+function findByUid(arr, uid){
+  if(!uid) return null;
+  return arr.find(function(x){ return ensureUid(x)===uid; }) || null;
+}
+
 // ─── Load live data from Supabase ────────────────────────────
 async function loadFromSupabase(){
   try {
@@ -20,7 +51,7 @@ async function loadFromSupabase(){
     if(camp && camp.length){
       campaigns = camp.map(function(c){
         return {
-          id: c.id, name: c.name, channel: c.channel, status: c.status,
+          id: c.id, uid: dbUid(c.id), name: c.name, channel: c.channel, status: c.status,
           content: c.message_a || '', meta: c.meta || '',
           sent_at:   c.sent_at || null,
           created_at: c.created_at || null,
@@ -35,7 +66,7 @@ async function loadFromSupabase(){
     const { data: segs } = await db.from('segments').select('*').eq('workspace_id', WORKSPACE);
     if(segs && segs.length){
       segments = segs.map(function(s){
-        return { id: s.id, name: s.name, rules: JSON.stringify(s.rules), count: s.contact_count, campaigns: 0, type: s.type };
+        return { id: s.id, uid: dbUid(s.id), name: s.name, rules: JSON.stringify(s.rules), count: s.contact_count, campaigns: 0, type: s.type };
       });
     }
     // Vendor connections
@@ -59,6 +90,9 @@ async function loadFromSupabase(){
     renderRules();
     renderVendorDropdown();
     renderVendorCards();
+    // A deep link (/campaigns/{id} etc.) may point at a row that only exists in
+    // Supabase — retry the route now that live data is in.
+    if(typeof retryPendingDeepLink==='function') retryPendingDeepLink();
     console.log('✅ PingCRM: live data loaded from Supabase');
   } catch(e){
     console.warn('Supabase load failed, using local data:', e.message);
@@ -443,11 +477,11 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
 
       <div style="margin-bottom:16px;">
         <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Work Email</label>
-        <input id="login-email" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="email" placeholder="you@company.com" value="rohan@acmecorp.in" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'">
+        <input id="login-email" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="email" placeholder="you@company.com" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'">
       </div>
       <div style="margin-bottom:8px;">
         <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Password</label>
-        <input id="login-pw" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="password" placeholder="••••••••••" value="demopassword" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'">
+        <input id="login-pw" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="password" placeholder="••••••••••" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'" onkeydown="if(event.key==='Enter')doLogin()">
       </div>
       <div style="text-align:right;margin-bottom:20px;">
         <button style="background:none;border:none;color:#14b8a6;font-size:12px;cursor:pointer;" onclick="showAuthPanel('forgot')">Forgot password?</button>
@@ -577,7 +611,11 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
     <div style="height:1px;background:rgba(255,255,255,.07);margin:8px 12px;"></div>
     <div class="nav-item" id="nav-settings"     onclick="go('settings')"      data-label="Settings"     role="button" tabindex="0" aria-label="Settings">     <span class="nav-icon" aria-hidden="true">⚙️</span><span class="nav-label">Settings</span></div>
   </div>
-  <div class="nav-bottom">Workspace: Acme Corp<br>Starter plan · 3 seats</div>
+  <div class="nav-bottom">
+    <div style="margin-bottom:10px;">Workspace: Acme Corp<br>Starter plan · 3 seats</div>
+    <div id="sidebar-user-email" style="font-size:11px;color:rgba(255,255,255,.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;"></div>
+    <button onclick="doLogout()" style="width:100%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.75);padding:7px 10px;border-radius:7px;font-size:12px;cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,.15)'" onmouseout="this.style.background='rgba(255,255,255,.08)'">↩ Sign Out</button>
+  </div>
 </div>
 
 <!-- ═══ MAIN ═══ -->
@@ -3098,7 +3136,7 @@ function goWizardStep(n){
   go('wizard-'+n);
 }
 
-function go(s){
+function go(s, opts){
   document.querySelectorAll('.screen').forEach(function(el){el.classList.remove('active');});
   var sc = document.getElementById('screen-'+s);
   if(sc) sc.classList.add('active');
@@ -3113,22 +3151,73 @@ function go(s){
   if(s==='wizard-5') syncReviewPreview();
   if(s==='dashboard') renderDashboard();
   if(s==='settings'){ renderTeamMembers(); loadSendingLimits(); }
-  // Update URL hash without triggering hashchange listener
+  // Update the URL — detail views (campaign / draft / segment) manage their own
+  // path-based URLs, so skip the rewrite for them.
+  if(opts && opts.keepUrl) return;
+  // Moving between wizard steps while editing a saved draft keeps the draft URL
+  if(/^wizard-\d$/.test(s) && /^\/campaigns\/drafts\//.test(window.location.pathname)) return;
   var hash = _screenToHash[s] || s;
-  if(window.location.hash !== '#'+hash){
-    history.replaceState(null, '', '#'+hash);
+  var target = '/#'+hash;
+  if(window.location.pathname + window.location.hash !== target){
+    history.replaceState(null, '', target);
   }
 }
 
+// ─── Deep-link router: /campaigns/{uid}, /campaigns/drafts/{uid}, /segments/{uid} ───
+var _pendingDeepLink = null;
+function routeFromPath(){
+  var p = window.location.pathname;
+  var m;
+  if((m = p.match(/^\/campaigns\/drafts\/([A-Za-z0-9]{20,})\/?$/))){
+    var d = findByUid(campaigns, m[1]);
+    if(d){ _pendingDeepLink=null; editCampaign(d.id); }
+    else { _pendingDeepLink=p; go('campaign-list',{keepUrl:true}); }
+    return true;
+  }
+  if((m = p.match(/^\/campaigns\/([A-Za-z0-9]{20,})\/?$/))){
+    var c = findByUid(campaigns, m[1]);
+    if(c){ _pendingDeepLink=null; viewAnalytics(c.id); }
+    else { _pendingDeepLink=p; go('campaign-list',{keepUrl:true}); }
+    return true;
+  }
+  if((m = p.match(/^\/segments\/([A-Za-z0-9]{20,})\/?$/))){
+    var s = findByUid(segments, m[1]);
+    if(s){ _pendingDeepLink=null; editSegment(ensureUid(s)); }
+    else { _pendingDeepLink=p; go('segmentation',{keepUrl:true}); }
+    return true;
+  }
+  return false;
+}
+function retryPendingDeepLink(){
+  if(_pendingDeepLink && _pendingDeepLink === window.location.pathname){
+    var still = _pendingDeepLink;
+    if(!routeFromPath() || _pendingDeepLink === still){
+      if(_pendingDeepLink){ // row truly doesn't exist
+        showToast('That link points to an item that no longer exists.');
+        _pendingDeepLink = null;
+      }
+    }
+  }
+}
+function setDetailUrl(path){
+  if(window.location.pathname !== path) history.pushState(null, '', path);
+}
+window.addEventListener('popstate', function(){
+  if(!routeFromPath()) goFromHash();
+});
+
 // Read hash on load and navigate to the right screen
 function goFromHash(){
+  // Path-based deep links take priority
+  if(routeFromPath()) return true;
   var hash = window.location.hash.replace('#','').replace(/^\//, '').trim();
-  // Handle /campaigns/{id} — analytics
+  // Legacy '#campaigns/{id}' links — open the campaign list
   if(/^campaigns\/[^/]+$/.test(hash) && hash !== 'campaigns/new'){
-    go('analytics'); return;
+    go('campaign-list'); return true;
   }
   var screen = _hashMap[hash];
-  if(screen) go(screen);
+  if(screen){ go(screen); return true; }
+  return false;
 }
 
 function syncReviewPreview(){
@@ -3175,13 +3264,15 @@ function editCampaign(id){
   currentCampId = id;
   document.getElementById('w-header-title').textContent = 'Edit: '+c.name;
   document.getElementById('camp-name-input').value = c.name;
-  go('wizard-1');
+  go('wizard-1', {keepUrl:true});
+  setDetailUrl('/campaigns/drafts/'+ensureUid(c));
 }
 
 async function viewAnalytics(id){
-  go('analytics');
   var c = campaigns.find(function(x){ return x.id===id; });
+  go('analytics', {keepUrl:!!c});
   if(!c) return;
+  setDetailUrl('/campaigns/'+ensureUid(c));
 
   // ── Populate header ──
   var nameEl = document.querySelector('.analytics-name');
@@ -3585,6 +3676,7 @@ async function sendCampaign(){
     }).select().single();
     if(!error && row){
       newCamp.id = row.id;
+      newCamp.uid = dbUid(row.id);
       campaignId = row.id;
     }
   } catch(e){ console.warn('Campaign insert failed', e); }
@@ -3639,10 +3731,40 @@ function createImportedSegmentClose(){
 }
 
 // ─── Draft save ───
-function saveDraft(){
-  var name = document.getElementById('camp-name-input') ? document.getElementById('camp-name-input').value : '';
-  showToast('Draft saved'+(name?' — "'+name+'"':''));
+async function saveDraft(){
+  var name = ((document.getElementById('camp-name-input')||{}).value || '').trim() || 'Untitled Draft';
+  var msgA = (document.getElementById('sms-body-a')||{}).value || '';
+  var c = currentCampId ? campaigns.find(function(x){return x.id===currentCampId;}) : null;
+  if(!c){
+    c = { id:'local_'+genUid(), uid:genUid(), channel:_wizardChannel||'SMS', status:'draft',
+          sent:'—', delivered:'—', delRate:'—', ctr:'—' };
+    campaigns.unshift(c);
+    currentCampId = c.id;
+  }
+  c.name = name;
+  c.content = msgA;
+  c.meta = 'Draft · last edited '+new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  renderCampaigns();
   saveState();
+  setDetailUrl('/campaigns/drafts/'+ensureUid(c));
+  showToast('Draft saved — "'+name+'"');
+
+  // Persist to Supabase so the draft (and its link) works on any device
+  try {
+    if(/^[0-9a-f]{8}-/.test(String(c.id))){
+      await db.from('campaigns').update({ name:name, message_a:msgA, meta:c.meta }).eq('id', c.id);
+    } else {
+      var { data: row, error } = await db.from('campaigns').insert({
+        workspace_id: WORKSPACE, name: name, channel: c.channel, status: 'draft',
+        message_a: msgA, meta: c.meta, sent: 0, delivered: 0, clicked: 0, failed: 0
+      }).select().single();
+      if(!error && row){
+        c.id = row.id; c.uid = dbUid(row.id); currentCampId = row.id;
+        saveState();
+        history.replaceState(null,'','/campaigns/drafts/'+c.uid);
+      }
+    }
+  } catch(e){ console.warn('Draft DB save failed (kept locally):', e.message); }
 }
 
 // ─── Segmentation ───
@@ -3656,6 +3778,17 @@ function showBuilder(){
   switchSegTab('segments');
   document.getElementById('builder-panel').style.display='block';
   document.getElementById('builder-panel').scrollIntoView({behavior:'smooth'});
+}
+
+// Open a segment by its uid — unique URL /segments/{uid}
+function editSegment(uid){
+  var s = findByUid(segments, uid);
+  if(!s){ showToast('Segment not found'); return; }
+  go('segmentation', {keepUrl:true});
+  showBuilder();
+  var nameEl = document.getElementById('seg-builder-name');
+  if(nameEl) nameEl.value = s.name;
+  setDetailUrl('/segments/'+ensureUid(s));
 }
 function hideBuilder(){document.getElementById('builder-panel').style.display='none';}
 
@@ -3793,14 +3926,15 @@ function renderSegments(){
       var badge = s.type==='csv'
         ? '<span style="background:#e8f4fd;color:#3b82f6;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;margin-left:6px;">CSV Import</span>'
         : '<span style="background:#e6fafa;color:#0d9488;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;margin-left:6px;">Rule-based</span>';
+      var suid = ensureUid(s);
       return '<div class="seg-card">'+
-        '<div class="seg-card-name">'+s.name+badge+'</div>'+
+        '<div class="seg-card-name" style="cursor:pointer;" onclick="editSegment(\''+suid+'\')">'+s.name+badge+'</div>'+
         '<div class="seg-card-rules">'+s.rules+'</div>'+
         '<div class="seg-card-meta">'+
           '<div><div class="seg-card-count">'+s.count.toLocaleString()+'</div>'+
           '<div class="seg-card-campaigns">'+(s.campaigns>0?'Used in '+s.campaigns+' campaign'+(s.campaigns>1?'s':''):'Not used yet')+'</div></div>'+
           '<div class="seg-card-actions">'+
-            '<button class="btn btn-secondary btn-sm" onclick="showBuilder()">Edit</button>'+
+            '<button class="btn btn-secondary btn-sm" onclick="editSegment(\''+suid+'\')">Edit</button>'+
             '<button class="btn btn-primary btn-sm" onclick="startWizard()">Use in Campaign</button>'+
           '</div>'+
         '</div></div>';
@@ -3837,7 +3971,7 @@ async function saveSegment(){
   var rulesObj = { operator: operator, conditions: conditions };
   var rulesDisplay = conditions.map(function(c){ return c.field+' '+c.op+' '+c.value; }).join(' '+operator+' ') || 'Custom filter';
 
-  var localSeg = {id:'s'+(segments.length+1), name:n, rules:rulesDisplay, count:count, campaigns:0, type:'rule'};
+  var localSeg = {id:'local_'+genUid(), uid:genUid(), name:n, rules:rulesDisplay, count:count, campaigns:0, type:'rule'};
   segments.push(localSeg);
   renderSegments();
   showToast('Segment "'+n+'" saved — '+count.toLocaleString()+' users');
@@ -3852,7 +3986,7 @@ async function saveSegment(){
       rules: rulesObj,
       contact_count: count
     }).select().single();
-    if(!error && row) localSeg.id = row.id;
+    if(!error && row){ localSeg.id = row.id; localSeg.uid = dbUid(row.id); }
     else if(error) console.warn('Segment insert error:', error.message);
   } catch(e){ console.warn('Segment insert failed', e); }
   saveState();
@@ -4364,6 +4498,7 @@ async function doLogin(){
       if(btn){ btn.textContent='Sign In →'; btn.disabled=false; }
       return;
     }
+    rememberEmail(email);
     enterApp();
   } catch(e) {
     errEl.textContent = e.message || 'Sign-in failed. Please try again.';
@@ -4412,6 +4547,14 @@ async function doForgotPw(){
 function enterApp(){
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('app-layout').style.display='flex';
+  // Show signed-in email in the sidebar
+  (async function(){
+    try {
+      var { data: { user } } = await db.auth.getUser();
+      var el = document.getElementById('sidebar-user-email');
+      if(el) el.textContent = user && user.email ? '👤 '+user.email : '';
+    } catch(e){}
+  })();
   // Go to hashed screen if present, else dashboard
   var hash = window.location.hash.replace('#','').trim();
   if(hash && _hashMap[hash]) go(_hashMap[hash]);
@@ -4581,6 +4724,7 @@ async function doSetPassword(){
     } catch(e){ console.warn('Member activation failed:', e.message); }
 
     PENDING_PW_SETUP = false;
+    rememberEmail(data && data.user ? data.user.email : '');
     try { history.replaceState(null,'',window.location.pathname); } catch(e){}
     showToast('🎉 Welcome to PingCRM! You\'re all set.');
     enterApp();
@@ -5131,8 +5275,24 @@ function loginAndSave(){ enterApp(); } // legacy alias — kept for "Skip to dem
 
 async function doLogout(){
   try { await db.auth.signOut(); } catch(e){}
+  try { localStorage.removeItem(SESSION_KEY); } catch(e){}
   document.getElementById('app-layout').style.display='none';
   document.getElementById('auth-screen').style.display='flex';
+  showAuthPanel('login');
+  prefillLoginEmail();
+  var pwEl = document.getElementById('login-pw'); if(pwEl) pwEl.value='';
+}
+
+// ─── Remember the user's email so login is pre-filled next time ───
+function rememberEmail(email){
+  try { if(email) localStorage.setItem('pingcrm_last_email', email); } catch(e){}
+}
+function prefillLoginEmail(){
+  try {
+    var em = localStorage.getItem('pingcrm_last_email');
+    var el = document.getElementById('login-email');
+    if(em && el && !el.value) el.value = em;
+  } catch(e){}
 }
 
 // ─── Init: check Supabase session, fall back to localStorage for offline/demo ───
@@ -5173,7 +5333,8 @@ async function initAuthState(){
         if(!data || !data.session){
           authEl.style.display='flex'; appEl.style.display='none';
           showAuthPanel('login');
-          showToast('That link is invalid or has expired. Sign in or request a new one.');
+          prefillLoginEmail();
+          showToast('That link is invalid or has expired. Sign in with your password, or use "Forgot password" to get a new link.');
         }
       } catch(e){}
     }, 4000);
@@ -5199,6 +5360,7 @@ async function initAuthState(){
 
   authEl.style.display='flex';
   appEl.style.display='none';
+  prefillLoginEmail();
 
   // Listen for auth state changes (e.g. after email confirmation redirect)
   db.auth.onAuthStateChange(function(event, session){
