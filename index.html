@@ -10,6 +10,10 @@
 const SUPA_URL  = 'https://rzxevrrbrjcvrmqgcbqm.supabase.co';
 const SUPA_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6eGV2cnJicmpjdnJtcWdjYnFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3Mzk5OTIsImV4cCI6MjA5NDMxNTk5Mn0.TpcY9BrKOoKEvEfhCHGzw3hV1Sycuq2oLZ_oIEOQOtI';
 const WORKSPACE = '00000000-0000-0000-0000-000000000001';
+// Capture auth params from the URL BEFORE the Supabase client initializes —
+// the client consumes the token hash, so reading it later is a race.
+var INITIAL_AUTH_TYPE = (window.location.hash.match(/type=(invite|recovery|signup|magiclink)/)||[])[1] || '';
+
 const db = supabase.createClient(SUPA_URL, SUPA_KEY);
 
 // ─── Unique IDs (>=20-char alphanumeric) for deep links ───
@@ -43,6 +47,35 @@ function findByUid(arr, uid){
   return arr.find(function(x){ return ensureUid(x)===uid; }) || null;
 }
 
+// ─── Segment rules: normalize the shapes found in the DB ───
+// Stored as either [{field,op,value},...] or {operator,conditions:[...]}
+var OP_LABELS = { equals:'=', 'not equals':'≠', not_equals:'≠', contains:'contains',
+  gt:'>', 'greater than':'>', gte:'≥', lt:'<', 'less than':'<', lte:'≤',
+  within_last:'within last', 'within last':'within last' };
+function normalizeRules(r){
+  try {
+    if(typeof r === 'string'){
+      if(r.charAt(0)!=='{' && r.charAt(0)!=='[') return _parseRulesString(r);
+      r = JSON.parse(r);
+    }
+    if(Array.isArray(r) && r.length) return { operator:'AND', conditions:r };
+    if(r && Array.isArray(r.conditions) && r.conditions.length)
+      return { operator: r.operator||'AND', conditions: r.conditions };
+  } catch(e){}
+  return null;
+}
+// Human-readable segment definition, e.g. "city = Mumbai AND total_orders ≥ 5"
+function prettyRules(r){
+  var n = normalizeRules(r);
+  if(!n) return 'No conditions yet';
+  return n.conditions.map(function(c){
+    var op = OP_LABELS[c.op] || c.op || '=';
+    var val = (c.value!==undefined && c.value!==null) ? c.value : '';
+    if(op==='within last') return c.field+' within last '+val+' days';
+    return c.field+' '+op+' '+val;
+  }).join(' '+n.operator+' ');
+}
+
 // ─── Load live data from Supabase ────────────────────────────
 async function loadFromSupabase(){
   try {
@@ -66,7 +99,7 @@ async function loadFromSupabase(){
     const { data: segs } = await db.from('segments').select('*').eq('workspace_id', WORKSPACE);
     if(segs && segs.length){
       segments = segs.map(function(s){
-        return { id: s.id, uid: dbUid(s.id), name: s.name, rules: JSON.stringify(s.rules), count: s.contact_count, campaigns: 0, type: s.type };
+        return { id: s.id, uid: dbUid(s.id), name: s.name, rules: prettyRules(s.rules), rulesObj: s.rules, count: s.contact_count || 0, campaigns: 0, type: s.type };
       });
     }
     // Vendor connections
@@ -3417,7 +3450,35 @@ function ddEdit(){
 }
 function ddStats(){if(activeDDId)viewAnalytics(activeDDId);closeDD();}
 function ddPause(){showToast('Campaign paused');closeDD();}
-function ddDuplicate(){showToast('Campaign duplicated — edit the copy from your drafts');closeDD();}
+async function ddDuplicate(){
+  var src = activeDDId ? campaigns.find(function(x){return x.id===activeDDId;}) : null;
+  closeDD();
+  if(!src){ showToast('Could not find campaign to duplicate'); return; }
+  var copy = {
+    id:'local_'+genUid(), uid:genUid(),
+    name: src.name+'_copy',
+    content: src.content||'', channel: src.channel,
+    status:'draft',
+    meta:'Draft · duplicated from "'+src.name+'"',
+    sent:'—', delivered:'—', delRate:'—', ctr:'—'
+  };
+  campaigns.unshift(copy);
+  renderCampaigns();
+  saveState();
+  // Persist the duplicate as a draft in Supabase so it gets a permanent id
+  try {
+    var { data: row, error } = await db.from('campaigns').insert({
+      workspace_id: WORKSPACE, name: copy.name, channel: copy.channel, status: 'draft',
+      message_a: copy.content, meta: copy.meta, sent: 0, delivered: 0, clicked: 0, failed: 0
+    }).select().single();
+    if(!error && row){ copy.id = row.id; copy.uid = dbUid(row.id); saveState(); }
+  } catch(e){ console.warn('Duplicate DB save failed (kept locally):', e.message); }
+  // Open it straight in the editor, message prefilled, ready to edit & send
+  editCampaign(copy.id);
+  var bodyEl = document.getElementById('sms-body-a');
+  if(bodyEl) bodyEl.value = copy.content||'';
+  showToast('Duplicated — now editing "'+copy.name+'"');
+}
 function ddArchive(){showToast('Campaign archived');closeDD();}
 
 // ─── Channel selection ───
@@ -3774,23 +3835,96 @@ function switchSegTab(t){
   document.getElementById('seg-tab-contacts').style.display=t==='contacts'?'block':'none';
   document.getElementById('seg-tab-segments').style.display=t==='segments'?'block':'none';
 }
+var _editingSegmentId = null;
+
 function showBuilder(){
+  // Fresh builder for a NEW segment
+  _editingSegmentId = null;
+  var t = document.getElementById('builder-title-text'); if(t) t.textContent='New Segment';
+  var nameEl = document.getElementById('seg-builder-name'); if(nameEl) nameEl.value='';
+  setBuilderConditions(null);
   switchSegTab('segments');
   document.getElementById('builder-panel').style.display='block';
   document.getElementById('builder-panel').scrollIntoView({behavior:'smooth'});
 }
 
-// Open a segment by its uid — unique URL /segments/{uid}
+function _setSelect(sel, val){
+  if(!sel || val===undefined || val===null) return;
+  var has=false;
+  for(var i=0;i<sel.options.length;i++) if(sel.options[i].value===String(val)){ has=true; break; }
+  if(!has) sel.add(new Option(String(val), String(val)));
+  sel.value = String(val);
+}
+
+// Map DB op codes to the builder's select options
+var OP_TO_BUILDER = { equals:'equals', not_equals:'not equals', 'not equals':'not equals',
+  contains:'contains', gt:'greater than', gte:'greater than', 'greater than':'greater than',
+  lt:'less than', lte:'less than', 'less than':'less than',
+  within_last:'within last', 'within last':'within last',
+  '=':'equals', '≠':'not equals', '>':'greater than', '≥':'greater than', '<':'less than', '≤':'less than' };
+
+// Rebuild the condition blocks in the builder from a rules object
+function setBuilderConditions(rulesObj){
+  var wrap = document.getElementById('conditions-wrap');
+  if(!wrap) return;
+  rulesObj = normalizeRules(rulesObj);
+  var conds = (rulesObj && rulesObj.conditions && rulesObj.conditions.length)
+    ? rulesObj.conditions : [{field:'city', op:'equals', value:''}];
+  var op = (rulesObj && rulesObj.operator) || 'AND';
+  wrap.innerHTML='';
+  conds.forEach(function(c, i){
+    if(i>0){
+      var badge=document.createElement('div');
+      badge.style.cssText='display:flex;align-items:center;gap:8px;margin:8px 0;';
+      badge.innerHTML='<div class="and-or-badge" onclick="toggleAndOr(this)">'+op+'</div><span style="font-size:12px;color:#aaa;">click to toggle AND / OR</span>';
+      wrap.appendChild(badge);
+    }
+    var block=document.createElement('div');
+    block.className='condition-block';
+    block.innerHTML='<div class="condition-row">'+
+      '<select style="flex:1.5;" onchange="debouncedLiveCount()"><option>city</option><option>plan_type</option><option>coupon_clicked</option><option>total_orders</option><option>last_seen</option><option>created_at</option></select>'+
+      '<select onchange="debouncedLiveCount()"><option>equals</option><option>not equals</option><option>contains</option><option>greater than</option><option>less than</option><option>within last</option></select>'+
+      '<input type="text" placeholder="value" style="flex:1;" oninput="debouncedLiveCount()">'+
+      '<button class="btn btn-secondary btn-sm" onclick="removeConditionBlock(this)">✕</button>'+
+    '</div>';
+    var sels = block.querySelectorAll('select');
+    _setSelect(sels[0], c.field || 'city');
+    _setSelect(sels[1], OP_TO_BUILDER[c.op] || c.op || 'equals');
+    block.querySelector('input').value = (c.value!==undefined && c.value!==null) ? c.value : '';
+    wrap.appendChild(block);
+  });
+  debouncedLiveCount();
+}
+
+// Best-effort parse of a display string like "city = Mumbai AND total_orders > 5"
+function _parseRulesString(str){
+  try {
+    var op = / OR /.test(str) ? 'OR' : 'AND';
+    var conds = String(str).split(' '+op+' ').map(function(p){
+      var m = p.trim().match(/^(\S+)\s+(equals|not equals|contains|greater than|less than|within last|>=|<=|≥|≤|=|>|<)\s+(.+)$/);
+      return m ? {field:m[1], op:m[2], value:m[3]} : null;
+    }).filter(Boolean);
+    if(conds.length) return {operator:op, conditions:conds};
+  } catch(e){}
+  return null;
+}
+
+// Open a segment for editing by its uid — unique URL /segments/{uid}
 function editSegment(uid){
   var s = findByUid(segments, uid);
   if(!s){ showToast('Segment not found'); return; }
   go('segmentation', {keepUrl:true});
-  showBuilder();
-  var nameEl = document.getElementById('seg-builder-name');
-  if(nameEl) nameEl.value = s.name;
+  switchSegTab('segments');
+  _editingSegmentId = s.id;
+  var t = document.getElementById('builder-title-text'); if(t) t.textContent='Edit Segment — '+s.name;
+  var nameEl = document.getElementById('seg-builder-name'); if(nameEl) nameEl.value = s.name;
+  setBuilderConditions(normalizeRules(s.rulesObj) || normalizeRules(s.rules));
+  var panel = document.getElementById('builder-panel');
+  panel.style.display='block';
+  panel.scrollIntoView({behavior:'smooth'});
   setDetailUrl('/segments/'+ensureUid(s));
 }
-function hideBuilder(){document.getElementById('builder-panel').style.display='none';}
+function hideBuilder(){document.getElementById('builder-panel').style.display='none'; _editingSegmentId=null;}
 
 // Legacy alias kept for any old callers
 function updateCount(){ debouncedLiveCount(); }
@@ -3971,7 +4105,27 @@ async function saveSegment(){
   var rulesObj = { operator: operator, conditions: conditions };
   var rulesDisplay = conditions.map(function(c){ return c.field+' '+c.op+' '+c.value; }).join(' '+operator+' ') || 'Custom filter';
 
-  var localSeg = {id:'local_'+genUid(), uid:genUid(), name:n, rules:rulesDisplay, count:count, campaigns:0, type:'rule'};
+  // ── Editing an existing segment → update in place ──
+  if(_editingSegmentId){
+    var seg = segments.find(function(x){ return x.id===_editingSegmentId; });
+    if(seg){
+      seg.name = n; seg.rules = rulesDisplay; seg.rulesObj = rulesObj; seg.count = count;
+      renderSegments();
+      showToast('Segment "'+n+'" updated — '+count.toLocaleString()+' users');
+      hideBuilder();
+      _editingSegmentId = null;
+      saveState();
+      try {
+        if(/^[0-9a-f]{8}-/.test(String(seg.id))){
+          await db.from('segments').update({ name:n, rules:rulesObj, contact_count:count }).eq('id', seg.id);
+        }
+      } catch(e){ console.warn('Segment update failed (kept locally):', e.message); }
+      return;
+    }
+    _editingSegmentId = null;
+  }
+
+  var localSeg = {id:'local_'+genUid(), uid:genUid(), name:n, rules:rulesDisplay, rulesObj:rulesObj, count:count, campaigns:0, type:'rule'};
   segments.push(localSeg);
   renderSegments();
   showToast('Segment "'+n+'" saved — '+count.toLocaleString()+' users');
@@ -4686,6 +4840,7 @@ async function sendInvite(){
 // Detect arrival via an emailed link: ?invite=1 / ?reset=1 in the query,
 // or type=invite|recovery|signup in the token hash Supabase appends.
 var PENDING_PW_SETUP = /[?&](invite|reset)=1/.test(window.location.search) ||
+                       /^(invite|recovery|signup)$/.test(INITIAL_AUTH_TYPE) ||
                        /type=(invite|recovery|signup)/.test(window.location.hash);
 
 function showSetPasswordScreen(email){
@@ -5310,6 +5465,19 @@ async function initAuthState(){
         showSetPasswordScreen(data.session.user ? data.session.user.email : '');
         return;
       }
+      // Safety net: signed in but never finished onboarding (member still
+      // "invited") → they have no password yet, make them set one now
+      try {
+        var _em = data.session.user ? data.session.user.email : '';
+        if(_em){
+          var { data: _mem } = await db.from('workspace_members').select('status')
+            .eq('workspace_id', WORKSPACE).eq('email', _em).maybeSingle();
+          if(_mem && _mem.status === 'invited'){
+            showSetPasswordScreen(_em);
+            return;
+          }
+        }
+      } catch(e){}
       authEl.style.display='none';
       appEl.style.display='flex';
       goFromHash(); if(!document.querySelector('.screen.active')) go('dashboard');
