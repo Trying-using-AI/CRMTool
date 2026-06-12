@@ -530,6 +530,29 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
       </div>
     </div>
 
+    <!-- Set password card (invite acceptance / password reset) -->
+    <div id="auth-setpw" style="display:none;background:white;border-radius:16px;padding:32px;box-shadow:0 24px 64px rgba(0,0,0,.3);">
+      <div style="font-size:20px;font-weight:700;margin-bottom:4px;" id="setpw-title">Welcome to PingCRM 👋</div>
+      <div style="font-size:13px;color:#888;margin-bottom:24px;" id="setpw-sub">You're joining as <strong id="setpw-email">your email</strong>. Set a password to finish.</div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Your Name</label>
+        <input id="setpw-name" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" placeholder="Rohan Mehta" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'">
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Password</label>
+        <input id="setpw-pw" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="password" placeholder="Min. 8 characters" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'">
+      </div>
+      <div style="margin-bottom:20px;">
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Confirm Password</label>
+        <input id="setpw-pw2" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;" type="password" placeholder="Re-enter password" onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='#ddd'" onkeydown="if(event.key==='Enter')doSetPassword()">
+      </div>
+
+      <div id="setpw-error" style="display:none;background:#fff0f0;border:1px solid #fcc;border-radius:8px;padding:10px 14px;font-size:13px;color:#c62828;margin-bottom:14px;"></div>
+
+      <button id="setpw-btn" style="width:100%;padding:11px;background:#14b8a6;color:white;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;" onclick="doSetPassword()">Set Password &amp; Continue →</button>
+    </div>
+
     <!-- Skip button for wireframe demo -->
     <div style="text-align:center;margin-top:20px;">
       <button style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.6);padding:8px 20px;border-radius:8px;font-size:12px;cursor:pointer;" onclick="enterApp()">Skip to app demo →</button>
@@ -2548,7 +2571,7 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
     </div>
 
     <div style="font-size:11px;color:#aaa;margin-top:12px;text-align:center;">
-      Invite sent via <strong>Resend</strong> from <em>no-reply@pingcrm.io</em> · Expires in 72 hours
+      A secure single-use invite link is emailed to them · Expires in 24 hours
     </div>
   </div>
 </div>
@@ -4305,7 +4328,7 @@ async function saveVendorConn(){
 
 // ─── Auth ───
 function showAuthPanel(panel){
-  ['login','signup','forgot'].forEach(function(p){
+  ['login','signup','forgot','setpw'].forEach(function(p){
     document.getElementById('auth-'+p).style.display = p===panel ? 'block':'none';
   });
 }
@@ -4481,35 +4504,97 @@ async function sendInvite(){
   var role  = document.getElementById('invite-role').value;
   var errEl = document.getElementById('invite-error');
   var okEl  = document.getElementById('invite-success');
+  var btn   = document.querySelector('#invite-modal button[onclick="sendInvite()"]');
   errEl.style.display='none'; okEl.style.display='none';
   if(!email || email.indexOf('@')<0){
     errEl.textContent='Please enter a valid email address.';
     errEl.style.display='block'; return;
   }
+  if(btn){ btn.textContent='Sending…'; btn.disabled=true; }
 
-  // Insert into workspace_members table with 'invited' status
   try {
-    var { error } = await db.from('workspace_members').insert({
-      workspace_id: WORKSPACE,
-      email: email,
-      role: role,
-      status: 'invited',
-      name: email.split('@')[0]
-    });
-    if(error && error.code === '23505'){
-      errEl.textContent = 'This email is already a member or has a pending invite.';
-      errEl.style.display='block'; return;
+    var sess = null;
+    try { sess = (await db.auth.getSession()).data.session; } catch(e){}
+    if(!sess){
+      throw new Error('You need to be signed in with a real account to send invites (demo mode cannot send email).');
     }
-    if(error) throw error;
-  } catch(e){
-    // Non-fatal: still show success even if DB write fails (demo mode)
-    console.warn('Invite insert failed:', e.message);
-  }
+    var resp = await fetch('/api/invite-member', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+sess.access_token },
+      body: JSON.stringify({ email: email, role: role, workspace_id: WORKSPACE })
+    });
+    var out = {};
+    try { out = await resp.json(); } catch(e){}
+    if(!resp.ok) throw new Error(out.error || 'Invite failed ('+resp.status+')');
 
-  okEl.innerHTML='✓ Invite sent to <strong>'+email+'</strong> as <strong>'+role+'</strong>. Link expires in 72h.';
-  okEl.style.display='block';
-  document.getElementById('invite-email').value='';
-  setTimeout(function(){ closeInviteModal(); showToast('Invite sent to '+email); renderTeamMembers(); }, 1800);
+    okEl.innerHTML='✓ Invite email sent to <strong>'+email+'</strong> as <strong>'+role+'</strong>. They\'ll get a link to set their password.';
+    okEl.style.display='block';
+    document.getElementById('invite-email').value='';
+    setTimeout(function(){ closeInviteModal(); showToast('Invite sent to '+email); renderTeamMembers(); }, 1800);
+  } catch(e){
+    errEl.textContent = e.message || 'Could not send invite.';
+    errEl.style.display='block';
+  } finally {
+    if(btn){ btn.textContent='Send Invite Email'; btn.disabled=false; }
+  }
+}
+
+// ─── Invite acceptance / password reset (set password) ───
+// Detect arrival via an emailed link: ?invite=1 / ?reset=1 in the query,
+// or type=invite|recovery|signup in the token hash Supabase appends.
+var PENDING_PW_SETUP = /[?&](invite|reset)=1/.test(window.location.search) ||
+                       /type=(invite|recovery|signup)/.test(window.location.hash);
+
+function showSetPasswordScreen(email){
+  document.getElementById('auth-screen').style.display='flex';
+  document.getElementById('app-layout').style.display='none';
+  document.getElementById('setpw-email').textContent = email || 'your email';
+  showAuthPanel('setpw');
+}
+
+async function doSetPassword(){
+  var name  = document.getElementById('setpw-name').value.trim();
+  var pw    = document.getElementById('setpw-pw').value;
+  var pw2   = document.getElementById('setpw-pw2').value;
+  var errEl = document.getElementById('setpw-error');
+  var btn   = document.getElementById('setpw-btn');
+  errEl.style.display='none';
+
+  if(pw.length < 8){ errEl.textContent='Password must be at least 8 characters.'; errEl.style.display='block'; return; }
+  if(pw !== pw2){ errEl.textContent='Passwords do not match.'; errEl.style.display='block'; return; }
+  if(btn){ btn.textContent='Saving…'; btn.disabled=true; }
+
+  try {
+    var payload = { password: pw };
+    if(name) payload.data = { full_name: name };
+    var { data, error } = await db.auth.updateUser(payload);
+    if(error) throw error;
+
+    // Mark the member active in the workspace
+    try {
+      var em = data && data.user ? data.user.email : '';
+      if(em){
+        await db.from('workspace_members')
+          .update({ status:'active', name: name || em.split('@')[0] })
+          .eq('workspace_id', WORKSPACE).eq('email', em);
+      }
+    } catch(e){ console.warn('Member activation failed:', e.message); }
+
+    PENDING_PW_SETUP = false;
+    try { history.replaceState(null,'',window.location.pathname); } catch(e){}
+    showToast('🎉 Welcome to PingCRM! You\'re all set.');
+    enterApp();
+  } catch(e){
+    var msg = (e.message||'').toLowerCase();
+    if(msg.includes('expired') || msg.includes('session') || msg.includes('not logged in')){
+      errEl.textContent = 'This link has expired. Ask your admin to re-send the invite, or use "Forgot password" on the sign-in page.';
+    } else {
+      errEl.textContent = e.message || 'Could not set password. Try again.';
+    }
+    errEl.style.display='block';
+  } finally {
+    if(btn){ btn.textContent='Set Password & Continue →'; btn.disabled=false; }
+  }
 }
 
 // ─── API key reveal ───
@@ -5060,6 +5145,11 @@ async function initAuthState(){
   try {
     const { data } = await db.auth.getSession();
     if(data && data.session){
+      // Arrived via an invite / password-reset email link → set password first
+      if(PENDING_PW_SETUP){
+        showSetPasswordScreen(data.session.user ? data.session.user.email : '');
+        return;
+      }
       authEl.style.display='none';
       appEl.style.display='flex';
       goFromHash(); if(!document.querySelector('.screen.active')) go('dashboard');
@@ -5067,6 +5157,30 @@ async function initAuthState(){
       return;
     }
   } catch(e){}
+
+  // Invite/reset link present but session not picked up yet — wait for
+  // Supabase to process the URL tokens instead of showing the login form.
+  if(PENDING_PW_SETUP){
+    db.auth.onAuthStateChange(function(event, session){
+      if(session && PENDING_PW_SETUP && (event==='SIGNED_IN' || event==='PASSWORD_RECOVERY' || event==='INITIAL_SESSION')){
+        showSetPasswordScreen(session.user ? session.user.email : '');
+      }
+    });
+    // If the link was expired/invalid, tokens never arrive — fall back to login after a wait
+    setTimeout(async function(){
+      try {
+        const { data } = await db.auth.getSession();
+        if(!data || !data.session){
+          authEl.style.display='flex'; appEl.style.display='none';
+          showAuthPanel('login');
+          showToast('That link is invalid or has expired. Sign in or request a new one.');
+        }
+      } catch(e){}
+    }, 4000);
+    authEl.style.display='flex';
+    appEl.style.display='none';
+    return;
+  }
 
   // Fall back to localStorage timestamp (offline / demo mode)
   try {
