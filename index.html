@@ -4670,14 +4670,124 @@ function switchStgTab(t){
 }
 
 // ─── Vendor modal ───
-function openAddVendor(){document.getElementById('vendor-modal').classList.add('open'); setVendorStep(1);}
-function closeVendorModal(){document.getElementById('vendor-modal').classList.remove('open');}
-function openEditVendor(v){
+function openAddVendor(){
+  _currentEditVendorId = null;
+  var btn = document.getElementById('vendor-save-btn');
+  if(btn){ btn.textContent='Save Connection'; btn.style.display='none'; btn.onclick=function(){saveVendorConn();}; }
   document.getElementById('vendor-modal').classList.add('open');
+  setVendorStep(1);
+}
+function closeVendorModal(){document.getElementById('vendor-modal').classList.remove('open');}
+var _currentEditVendorId = null;
+
+function _vendorTypeFromName(name, channel){
+  var n = (name||'').toLowerCase();
+  var c = (channel||'').toLowerCase();
+  if(c === 'whatsapp' || c === 'wa'){
+    if(n.includes('twilio')) return ['wa','twilio-wa'];
+    if(n.includes('gupshup')) return ['wa','gupshup-wa'];
+    if(n.includes('360')) return ['wa','360dialog'];
+    if(n.includes('kaleyra')) return ['wa','kaleyra-wa'];
+    return ['wa','meta'];
+  }
+  if(c === 'push'){
+    if(n.includes('fcm')||n.includes('firebase')) return ['push','fcm'];
+    if(n.includes('apns')||n.includes('apple')) return ['push','apns'];
+    return ['push','onesignal'];
+  }
+  // SMS
+  if(n.includes('twilio')) return ['sms','twilio'];
+  if(n.includes('msg91')) return ['sms','msg91'];
+  if(n.includes('gupshup')) return ['sms','gupshup-sms'];
+  if(n.includes('kaleyra')) return ['sms','kaleyra'];
+  if(n.includes('exotel')) return ['sms','exotel'];
+  return ['sms','custom'];
+}
+
+function _prefillVendorCreds(vtype, cfg){
+  if(!cfg) return;
+  // Map known config keys back to specific input IDs
+  var fieldMap = {
+    'twilio-wa':  {account_sid:'twilio-wa-sid', auth_token:'twilio-wa-token', whatsapp_from:'twilio-wa-from'},
+    'twilio':     {account_sid:'twilio-sid', auth_token:'twilio-token', sender_id:'twilio-from'},
+    'msg91':      {api_key:'msg91-key', sender_id:'msg91-sender'},
+    'meta':       {phone_number_id:'meta-phone-id', permanent_access_token:'meta-token', waba_id:'meta-waba'},
+    'fcm':        {server_key:'fcm-key'},
+  };
+  var map = fieldMap[vtype] || {};
+  Object.keys(cfg).forEach(function(key){
+    var inputId = map[key];
+    if(inputId){
+      var el = document.getElementById(inputId);
+      if(el) el.value = cfg[key] || '';
+    }
+  });
+}
+
+function openEditVendor(id){
+  var vendor = vendorConnections.find(function(v){return v.id===id;});
+  if(!vendor){ showToast('Vendor not found'); return; }
+  _currentEditVendorId = id;
+
+  var pair = _vendorTypeFromName(vendor.name, vendor.channel);
+  var ch = pair[0], vtype = pair[1];
+
+  document.getElementById('vendor-modal').classList.add('open');
+  // Switch to correct channel tab first
+  setVendorChannel(ch);
   setVendorStep(2);
-  // pre-select vendor
-  document.querySelectorAll('.vendor-opt').forEach(function(el){el.classList.toggle('selected',el.dataset.v===v);});
-  document.getElementById('vendor-step-title').textContent='Edit Connection';
+
+  // Pre-select the right vendor option card
+  var optEl = document.querySelector('.vendor-opt[data-v="'+vtype+'"]');
+  if(optEl) selectVendorOpt(optEl, vtype);
+
+  // Pre-fill stored credentials into the form
+  // vendor.cred is the masked display string; actual config is fetched from DB via the stored cfg
+  // We stored it in the DB as vendor_connections.config — need to reload it
+  // Try to extract what we have (may be partial — forces user to re-enter if needed)
+  document.getElementById('vendor-step-title').textContent = 'Edit — '+vendor.name;
+
+  // Load full config from DB then prefill
+  db.from('vendor_connections').select('config').eq('id', id).single().then(function(res){
+    if(res.data && res.data.config) _prefillVendorCreds(vtype, res.data.config);
+  });
+
+  // Change save button to Update
+  var btn = document.getElementById('vendor-save-btn');
+  if(btn){
+    btn.textContent = 'Update Connection';
+    btn.style.display = '';
+    btn.onclick = function(){ updateVendorConn(); };
+  }
+}
+
+async function updateVendorConn(){
+  if(!_currentEditVendorId){ showToast('No vendor selected for update'); return; }
+  var creds = _collectVendorCreds();
+  var senderId = _getSenderId();
+  var btn = document.getElementById('vendor-save-btn');
+  if(btn){ btn.textContent='Updating…'; btn.disabled=true; }
+  try {
+    var resp = await fetch('/api/update-vendor', {
+      method: 'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ workspace_id: WORKSPACE, vendor_id: _currentEditVendorId, config: creds, sender_id: senderId })
+    });
+    var json = await resp.json();
+    if(json.ok){
+      // Update local vendorConnections too
+      var v = vendorConnections.find(function(x){return x.id===_currentEditVendorId;});
+      if(v){ v.sender = senderId||v.sender; }
+      showToast('✓ Vendor credentials updated');
+      closeVendorModal();
+    } else {
+      showToast('Update failed: '+(json.error||'unknown'));
+    }
+  } catch(e){
+    showToast('Network error: '+e.message);
+  }
+  if(btn){ btn.textContent='Update Connection'; btn.disabled=false; btn.onclick=function(){updateVendorConn();}; }
+  _currentEditVendorId = null;
 }
 var _vendorChannel = 'sms'; // 'sms', 'wa', or 'push'
 function setVendorChannel(ch){
