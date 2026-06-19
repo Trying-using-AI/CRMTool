@@ -1106,6 +1106,35 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
       </div>
     </div>
 
+    <!-- Twilio WA Sandbox message composer (shown when Twilio WA vendor is selected) -->
+    <div id="wa-twilio-pane" style="display:none;">
+      <div style="background:#e8fdf5;border:1px solid #6ee7b7;border-radius:8px;padding:11px 14px;font-size:12px;color:#065f46;margin-bottom:18px;">
+        <strong>Twilio WhatsApp Sandbox</strong> — free-form text, no template approval needed. Recipients must have joined by texting <code>join goes-jar</code> to <strong>+1 415 523 8886</strong>.
+      </div>
+      <div class="form-group">
+        <label class="form-lbl">Message <span style="color:#ef4444;">*</span></label>
+        <div class="var-chips" style="margin-bottom:8px;">
+          <span style="font-size:12px;color:#aaa;align-self:center;">Insert:</span>
+          <span class="var-chip" onclick="insertTWAVar('{{first_name}}')">{{first_name}}</span>
+          <span class="var-chip" onclick="insertTWAVar('{{coupon_code}}')">{{coupon_code}}</span>
+          <span class="var-chip" onclick="insertTWAVar('{{city}}')">{{city}}</span>
+          <span class="var-chip" onclick="insertTWAVar('{{phone}}')">{{phone}}</span>
+        </div>
+        <textarea class="msg-textarea" id="twilio-wa-body" oninput="updateTWAPreview()" placeholder="Hi {{first_name}}! Your exclusive offer is ready. Check it out at acme.co/sale" style="min-height:110px;"></textarea>
+        <div class="char-row">
+          <span style="font-size:11px;color:#aaa;">Use {{first_name}}, {{coupon_code}}, {{city}} to personalise</span>
+          <span id="twa-char-count">0 / 1600</span>
+        </div>
+      </div>
+      <div class="sms-preview-wrap" style="background:#e5ddd5;border-color:#c8bbae;">
+        <div class="preview-lbl" style="color:#075e54;">WhatsApp Preview</div>
+        <div class="phone-mock" style="background:#e5ddd5;">
+          <div class="sms-sender" style="color:#25d366;font-size:11px;">● Twilio Sandbox · +1 415 523 8886</div>
+          <div class="sms-bubble" id="twa-preview" style="background:white;color:#111;border-radius:0 8px 8px 8px;box-shadow:0 1px 2px rgba(0,0,0,.15);">Hi Priya! Your exclusive offer is ready. Check it out at acme.co/sale</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Push message composer -->
     <div id="push-message-pane" style="display:none;">
       <div class="form-group">
@@ -2756,13 +2785,13 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
       <!-- Twilio WhatsApp Sandbox -->
       <div id="creds-twilio-wa" style="display:none;">
         <div style="background:#e8fdf5;border:1px solid #6ee7b7;border-radius:8px;padding:11px 14px;font-size:12px;color:#065f46;margin-bottom:14px;">
-          <strong>Sandbox mode</strong> — participants must first text <code>join goes-jar</code> to <code>+1 415 523 8886</code>.<br>
-          Account SID &amp; Auth Token are read from server environment variables (already configured). Only the from-number is needed here.
+          <strong>Sandbox mode</strong> — participants must first text <code>join goes-jar</code> to <code>+1 415 523 8886</code>. Plain text messages — no template approval needed.
         </div>
-        <div class="form-group"><label class="form-lbl">WhatsApp From (sandbox number)</label><input class="form-input" id="twilio-wa-from" value="whatsapp:+14155238886" placeholder="whatsapp:+14155238886"></div>
-        <div style="background:#f9f9f9;border-radius:8px;padding:10px 14px;font-size:12px;color:#888;">
-          Messages will be sent as plain text — no template approval needed in sandbox mode.
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div class="form-group"><label class="form-lbl">Account SID <span style="color:#ef4444;">*</span></label><input class="form-input" id="twilio-wa-sid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" type="text"></div>
+          <div class="form-group"><label class="form-lbl">Auth Token <span style="color:#ef4444;">*</span></label><input class="form-input" id="twilio-wa-token" placeholder="your auth token" type="password"></div>
         </div>
+        <div class="form-group"><label class="form-lbl">WhatsApp From</label><input class="form-input" id="twilio-wa-from" value="whatsapp:+14155238886" placeholder="whatsapp:+14155238886"></div>
       </div>
 
       <!-- Meta Cloud API (WhatsApp) -->
@@ -3785,6 +3814,12 @@ function createImportedSegmentClose(){
 async function saveDraft(){
   var name = ((document.getElementById('camp-name-input')||{}).value || '').trim() || 'Untitled Draft';
   var msgA = (document.getElementById('sms-body-a')||{}).value || '';
+  // For WA campaigns, read from the appropriate pane
+  if(_wizardChannel === 'WhatsApp'){
+    msgA = _wizardVendorType === 'twilio'
+      ? ((document.getElementById('twilio-wa-body')||{}).value||'')
+      : ((document.getElementById('wa-body')||{}).value||'');
+  }
   var c = currentCampId ? campaigns.find(function(x){return x.id===currentCampId;}) : null;
   if(!c){
     c = { id:'local_'+genUid(), uid:genUid(), channel:_wizardChannel||'SMS', status:'draft',
@@ -4338,7 +4373,12 @@ function selectWizardVendor(id){
     });
   }
   var chosen = vendorConnections.find(function(v){return v.id===id;});
-  if(chosen) setWizardChannel(chosen.channel==='WhatsApp'?'WhatsApp':'SMS');
+  if(chosen){
+    var isTwilio = (chosen.name||'').toLowerCase().includes('twilio');
+    _wizardVendorType = isTwilio ? 'twilio' : 'meta';
+    var ch = chosen.channel==='WhatsApp'?'WhatsApp':chosen.channel==='Push'?'Push':'SMS';
+    setWizardChannel(ch);
+  }
 }
 
 function renderVendorCards(){
@@ -5095,21 +5135,51 @@ function updateWAPreview(){
 
 // ─── Show WA pane when WA vendor selected in wizard step 1 ───
 var _wizardChannel = 'SMS';
+var _wizardVendorType = 'meta'; // 'meta' or 'twilio'
+
+function updateWAMessageMode(){
+  var metaPane   = document.getElementById('wa-message-pane');
+  var twilioPane = document.getElementById('wa-twilio-pane');
+  var isWA = _wizardChannel === 'WhatsApp';
+  var isTwilio = _wizardVendorType === 'twilio';
+  if(metaPane)   metaPane.style.display   = (isWA && !isTwilio) ? 'block' : 'none';
+  if(twilioPane) twilioPane.style.display = (isWA &&  isTwilio) ? 'block' : 'none';
+}
+
 function setWizardChannel(ch){
   _wizardChannel = ch;
   var smsPanes  = document.getElementById('variant-a-pane');
-  var waPanes   = document.getElementById('wa-message-pane');
   var pushPanes = document.getElementById('push-message-pane');
   if(smsPanes) smsPanes.style.display = ch==='SMS'?'block':'none';
   var vbpane = document.getElementById('variant-b-pane');
   if(vbpane && ch!=='SMS') vbpane.style.display='none';
   var vtabadd = document.getElementById('vtab-add');
   if(vtabadd) vtabadd.style.display = ch==='SMS'?'':'none';
-  if(waPanes) waPanes.style.display  = ch==='WhatsApp'?'block':'none';
+  updateWAMessageMode();
   if(pushPanes) pushPanes.style.display = ch==='Push'?'block':'none';
   // update step 3 subtitle
   var sub = document.querySelector('#screen-wizard-3 .page-subtitle');
   if(sub) sub.textContent = 'Step 3 of 5 · '+ch+' · '+document.getElementById('w3-recipient-count').textContent+' recipients';
+}
+
+function insertTWAVar(v){
+  var ta = document.getElementById('twilio-wa-body');
+  if(!ta) return;
+  var s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0,s)+v+ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s+v.length;
+  ta.focus();
+  updateTWAPreview();
+}
+
+function updateTWAPreview(){
+  var body = (document.getElementById('twilio-wa-body')||{}).value||'';
+  var prev = document.getElementById('twa-preview');
+  if(prev) prev.innerHTML = escHtml(body||'Your message here…')
+    .replace(/\{\{first_name\}\}/g,'Priya').replace(/\{\{coupon_code\}\}/g,'SAVE20')
+    .replace(/\{\{city\}\}/g,'Mumbai').replace(/\{\{phone\}\}/g,'9860918398');
+  var cc = document.getElementById('twa-char-count');
+  if(cc) cc.textContent = body.length+' / 1600';
 }
 
 var _activePushTab = 'ios';
