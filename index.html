@@ -843,15 +843,15 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
         </select>
         <span style="font-size:13px;color:#666;">is triggered</span>
       </div>
-      <div class="cond-builder">
+      <div class="cond-builder" id="evt-cond-builder">
         <div class="cond-label">Additional conditions (optional)</div>
-        <div class="cond-row">
-          <select style="flex:1.2;"><option>city</option><option>plan_type</option><option>coupon_clicked</option></select>
-          <select><option>equals</option><option>not equals</option><option>contains</option></select>
+        <div class="cond-row evt-cond-row">
+          <select style="flex:1.2;"><option>city</option><option>plan_type</option><option>coupon_clicked</option><option>total_orders</option><option>last_seen</option></select>
+          <select><option>equals</option><option>not equals</option><option>contains</option><option>greater than</option><option>less than</option></select>
           <input type="text" placeholder="value" style="flex:1;">
-          <button class="btn btn-secondary btn-sm">✕</button>
+          <button class="btn btn-secondary btn-sm" onclick="removeEvtCondition(this)">✕</button>
         </div>
-        <button class="btn-link" style="margin-top:6px;">+ Add condition</button>
+        <button class="btn-link" style="margin-top:6px;" onclick="addEvtCondition()">+ Add condition</button>
       </div>
       <div style="margin-top:14px;">
         <div class="form-lbl">Delay after event</div>
@@ -2034,7 +2034,7 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
   <div class="page-header">
     <div>
       <div class="page-title">Events</div>
-      <div class="page-subtitle">Ingest user behaviour · 1,284 events in last 24h</div>
+      <div class="page-subtitle" id="events-subtitle">Ingest user behaviour · loading…</div>
     </div>
     <div class="header-actions">
       <span style="font-size:12px;color:#10b981;display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;animation:pulse 1.5s infinite;"></span> Live ingestion active</span>
@@ -2065,13 +2065,24 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
   </style>
 
   <div class="sub-tabs">
-    <div class="sub-tab active" id="etab-log" onclick="switchEvtTab('log')">Event Log</div>
+    <div class="sub-tab active" id="etab-summary" onclick="switchEvtTab('summary')">Event Summary</div>
+    <div class="sub-tab" id="etab-log" onclick="switchEvtTab('log')">Event Log</div>
     <div class="sub-tab" id="etab-setup" onclick="switchEvtTab('setup')">Ingestion Setup</div>
     <div class="sub-tab" id="etab-rules" onclick="switchEvtTab('rules')">Attribute Rules</div>
   </div>
 
+  <!-- ── EVENT SUMMARY ── -->
+  <div id="evt-tab-summary" class="content">
+    <div class="table-wrap">
+      <div style="display:grid;grid-template-columns:1fr 160px 100px;padding:9px 16px;background:#fafafa;border-bottom:1px solid #e5e5e5;font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.5px;">
+        <div>Event Name</div><div>Fires (last 24h)</div><div>Source</div>
+      </div>
+      <div id="evt-summary-body"><div style="padding:32px;text-align:center;color:#aaa;font-size:13px;">Loading…</div></div>
+    </div>
+  </div>
+
   <!-- ── EVENT LOG ── -->
-  <div id="evt-tab-log" class="content">
+  <div id="evt-tab-log" class="content" style="display:none;">
     <div class="filter-bar">
       <input type="text" placeholder="🔍  Filter by event name…" style="width:220px;">
       <input type="text" placeholder="User ID or phone…" style="width:190px;">
@@ -2084,57 +2095,8 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
       </div>
     </div>
     <div class="table-wrap">
-      <div class="event-log-head"><div>Time</div><div>Event Name</div><div>User ID</div><div>Properties</div><div>Source</div></div>
-      <div class="event-log-row" style="background:#f0fff8;">
-        <div style="font-size:12px;color:#888;">11:42:08 AM</div>
-        <div class="evt-name">coupon_clicked</div>
-        <div style="font-size:12px;font-family:monospace;">USR_001</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"coupon_code":"SAVE20","product_id":"P-991"}</div>
-        <div><span class="evt-source evt-source-api">API</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:41:55 AM</div>
-        <div class="evt-name">order_placed</div>
-        <div style="font-size:12px;font-family:monospace;">USR_084</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"order_id":"ORD-4421","amount":1299,"city":"Mumbai"}</div>
-        <div><span class="evt-source evt-source-api">API</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:41:31 AM</div>
-        <div class="evt-name">page_view</div>
-        <div style="font-size:12px;font-family:monospace;">USR_203</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"page":"/checkout","referrer":"email_campaign"}</div>
-        <div><span class="evt-source evt-source-js">JS</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:40:14 AM</div>
-        <div class="evt-name">cart_abandoned</div>
-        <div style="font-size:12px;font-family:monospace;">USR_417</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"cart_value":2340,"items_count":3}</div>
-        <div><span class="evt-source evt-source-js">JS</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:39:02 AM</div>
-        <div class="evt-name">signup_completed</div>
-        <div style="font-size:12px;font-family:monospace;">USR_918</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"referral_code":"REF10","plan":"free"}</div>
-        <div><span class="evt-source evt-source-api">API</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:37:48 AM</div>
-        <div class="evt-name">coupon_clicked</div>
-        <div style="font-size:12px;font-family:monospace;">USR_762</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"coupon_code":"FLAT50","product_id":"P-114"}</div>
-        <div><span class="evt-source evt-source-api">API</span></div>
-      </div>
-      <div class="event-log-row">
-        <div style="font-size:12px;color:#888;">11:36:20 AM</div>
-        <div class="evt-name">user_inactive_30d</div>
-        <div style="font-size:12px;font-family:monospace;">USR_033</div>
-        <div style="font-size:12px;color:#555;font-family:monospace;">{"days_inactive":34,"last_order_id":"ORD-2109"}</div>
-        <div><span class="evt-source evt-source-api">API</span></div>
-      </div>
-      <div style="padding:12px 16px;font-size:12px;color:#aaa;text-align:center;">Showing latest 7 of 1,284 events today · <button class="btn-link">Load more</button></div>
+      <div class="event-log-head"><div>Time</div><div>Event Name</div><div>User / Phone</div><div>Properties</div><div>Source</div></div>
+      <div id="evt-log-body"><div style="padding:32px;text-align:center;color:#aaa;font-size:13px;">Loading…</div></div>
     </div>
   </div>
 
@@ -2147,39 +2109,40 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
         <div style="font-size:15px;font-weight:600;margin-bottom:4px;">REST API (Server-side)</div>
         <div style="font-size:12px;color:#888;margin-bottom:18px;">Call from your backend whenever a user action occurs. Recommended for all transactional events.</div>
 
-        <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Your API Key</div>
-        <div class="key-box" style="margin-bottom:16px;">
-          <div class="key-val">pk_live_••••••••••••••••••acme7f3</div>
-          <button class="btn btn-secondary btn-sm" onclick="showToast('API key copied')">Copy</button>
-          <button class="btn btn-danger btn-sm" onclick="showToast('Key rotated — update your backend')">Rotate</button>
-        </div>
-
         <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Endpoint</div>
         <div class="key-box" style="margin-bottom:16px;font-family:monospace;font-size:12px;">
-          POST &nbsp;https://api.pingcrm.io/v1/events
+          POST &nbsp;https://pingcrm-tau.vercel.app/api/ingest-event
         </div>
 
-        <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Example request</div>
+        <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Required body fields</div>
+        <div class="key-box" style="margin-bottom:16px;font-size:12px;flex-direction:column;align-items:flex-start;gap:4px;">
+          <div><code>workspace_id</code> — <span style="color:#888;">00000000-0000-0000-0000-000000000001</span></div>
+          <div><code>user_id</code> — phone number of the contact (e.g. 9876543210)</div>
+          <div><code>event</code> — event name string</div>
+          <div><code>properties</code> — any key/value object (optional)</div>
+        </div>
+
+        <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Example — fire an event via cURL</div>
         <div class="code-block">
-          <button class="code-copy" onclick="showToast('Code copied')">Copy</button>
-<span class="code-comment"># cURL</span>
-curl -X POST https://api.pingcrm.io/v1/events \
-  -H <span class="code-str">"Authorization: Bearer pk_live_...acme7f3"</span> \
+          <button class="code-copy" onclick="copyEvtCurl()">Copy</button>
+<span class="code-comment"># Paste this in your terminal to test</span>
+curl -X POST https://pingcrm-tau.vercel.app/api/ingest-event \
   -H <span class="code-str">"Content-Type: application/json"</span> \
   -d <span class="code-str">'{
-    "user_id": "USR_001",
+    "workspace_id": "00000000-0000-0000-0000-000000000001",
+    "user_id": "9876543210",
     "event": "coupon_clicked",
     "properties": {
+      "phone": "9876543210",
       "coupon_code": "SAVE20",
       "product_id": "P-991"
-    },
-    "timestamp": "2026-05-13T11:42:08Z"
+    }
   }'</span>
         </div>
 
         <div style="margin-top:14px;background:#e8f4fd;border-radius:8px;padding:12px 14px;font-size:12px;color:#1e40af;">
-          <strong>Response:</strong> &nbsp;<code>{"status":"ok","event_id":"evt_Xk9mN2pQ"}</code><br>
-          <span style="color:#888;margin-top:4px;display:block;">HTTP 200 = accepted · HTTP 400 = bad payload · HTTP 401 = invalid key</span>
+          <strong>Response:</strong> &nbsp;<code>{"ok":true,"event":"coupon_clicked","rules_applied":0}</code><br>
+          <span style="color:#888;margin-top:4px;display:block;">HTTP 200 = ingested · HTTP 400 = missing fields · No auth key needed by default</span>
         </div>
       </div>
 
@@ -3184,6 +3147,7 @@ function go(s, opts){
   if(s==='wizard-5') syncReviewPreview();
   if(s==='dashboard') renderDashboard();
   if(s==='settings'){ renderTeamMembers(); loadSendingLimits(); }
+  if(s==='events'){ _evtLoaded=false; loadEventsData(); }
   // Update the URL — detail views (campaign / draft / segment) manage their own
   // path-based URLs, so skip the rewrite for them.
   if(opts && opts.keepUrl) return;
@@ -4382,10 +4346,123 @@ function removeVendor(id){
 
 // ─── Events tabs ───
 function switchEvtTab(t){
-  ['log','setup','rules'].forEach(function(x){
+  ['summary','log','setup','rules'].forEach(function(x){
     document.getElementById('etab-'+x).classList.toggle('active',x===t);
     document.getElementById('evt-tab-'+x).style.display=x===t?'block':'none';
   });
+}
+
+// ─── Load real events from Supabase ───
+var _evtLoaded = false;
+async function loadEventsData(force){
+  if(_evtLoaded && !force) return;
+  _evtLoaded = true;
+
+  var since = new Date(Date.now() - 24*60*60*1000).toISOString();
+
+  // Fetch latest 50 events for the log
+  var logRes = await db.from('events')
+    .select('id, event_name, contact_id, properties, source, created_at')
+    .eq('workspace_id', WORKSPACE)
+    .order('created_at', {ascending:false})
+    .limit(50);
+
+  var evts = logRes.data || [];
+
+  // Update subtitle
+  var sub = document.getElementById('events-subtitle');
+  if(sub) sub.textContent = 'Ingest user behaviour · '+evts.length+' events loaded';
+
+  // ── Render Event Log ──
+  var logBody = document.getElementById('evt-log-body');
+  if(logBody){
+    if(evts.length === 0){
+      logBody.innerHTML = '<div style="padding:40px;text-align:center;color:#aaa;font-size:13px;">No events yet — fire one with the curl command in Ingestion Setup</div>';
+    } else {
+      logBody.innerHTML = evts.map(function(e, i){
+        var d = new Date(e.created_at);
+        var timeStr = d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        var dateStr = d.toLocaleDateString('en-IN',{month:'short',day:'numeric'});
+        var propsStr = JSON.stringify(e.properties||{});
+        if(propsStr.length > 60) propsStr = propsStr.slice(0,57)+'…';
+        var src = (e.source||'api').toLowerCase();
+        var srcClass = src==='js'?'evt-source-js':'evt-source-api';
+        var userId = (e.properties && e.properties.phone) || (e.contact_id ? e.contact_id.slice(0,8)+'…' : '—');
+        return '<div class="event-log-row"'+(i===0?' style="background:#f0fff8;"':'')+'>'+
+          '<div style="font-size:12px;color:#888;">'+timeStr+'<br><span style="font-size:10px;color:#bbb;">'+dateStr+'</span></div>'+
+          '<div class="evt-name">'+escHtml(e.event_name)+'</div>'+
+          '<div style="font-size:12px;font-family:monospace;">'+escHtml(String(userId))+'</div>'+
+          '<div style="font-size:12px;color:#555;font-family:monospace;">'+escHtml(propsStr)+'</div>'+
+          '<div><span class="evt-source '+srcClass+'">'+src.toUpperCase()+'</span></div>'+
+        '</div>';
+      }).join('');
+    }
+  }
+
+  // ── Render Event Summary ──
+  // Group events by name for last 24h count
+  var summaryBody = document.getElementById('evt-summary-body');
+  if(summaryBody){
+    // Fetch last-24h events
+    var sumRes = await db.from('events')
+      .select('event_name, source, created_at')
+      .eq('workspace_id', WORKSPACE)
+      .gte('created_at', since);
+    var sumEvts = sumRes.data || [];
+
+    if(sumEvts.length === 0 && evts.length === 0){
+      summaryBody.innerHTML = '<div style="padding:40px;text-align:center;color:#aaa;font-size:13px;">No events yet. Fire one using the curl command in Ingestion Setup.</div>';
+    } else {
+      // Count by event name
+      var counts = {};
+      var sources = {};
+      sumEvts.forEach(function(e){
+        counts[e.event_name] = (counts[e.event_name]||0)+1;
+        sources[e.event_name] = e.source || 'api';
+      });
+      // Also include event names from the log that may be older
+      evts.forEach(function(e){
+        if(!counts[e.event_name]) counts[e.event_name] = 0;
+        if(!sources[e.event_name]) sources[e.event_name] = e.source || 'api';
+      });
+      var names = Object.keys(counts).sort(function(a,b){ return counts[b]-counts[a]; });
+      summaryBody.innerHTML = names.map(function(name){
+        var c = counts[name]||0;
+        var src = (sources[name]||'api').toLowerCase();
+        var srcClass = src==='js'?'evt-source-js':'evt-source-api';
+        return '<div style="display:grid;grid-template-columns:1fr 160px 100px;padding:12px 16px;border-bottom:1px solid #f0f0f0;align-items:center;font-size:13px;">'+
+          '<div class="evt-name">'+escHtml(name)+'</div>'+
+          '<div style="font-weight:600;">'+c+'</div>'+
+          '<div><span class="evt-source '+srcClass+'">'+src.toUpperCase()+'</span></div>'+
+        '</div>';
+      }).join('');
+      // Update subtitle with 24h count
+      if(sub) sub.textContent = 'Ingest user behaviour · '+sumEvts.length+' events in last 24h';
+    }
+  }
+}
+
+function copyEvtCurl(){
+  var txt = 'curl -X POST https://pingcrm-tau.vercel.app/api/ingest-event \\\n  -H "Content-Type: application/json" \\\n  -d \'{"workspace_id":"'+WORKSPACE+'","user_id":"9876543210","event":"coupon_clicked","properties":{"phone":"9876543210","coupon_code":"SAVE20"}}\'';
+  navigator.clipboard.writeText(txt).then(function(){ showToast('curl command copied'); });
+}
+
+// ─── Event-trigger campaign condition helpers ───
+function addEvtCondition(){
+  var builder = document.getElementById('evt-cond-builder');
+  if(!builder) return;
+  var addBtn = builder.querySelector('.btn-link');
+  var row = document.createElement('div');
+  row.className = 'cond-row evt-cond-row';
+  row.innerHTML = '<select style="flex:1.2;"><option>city</option><option>plan_type</option><option>coupon_clicked</option><option>total_orders</option><option>last_seen</option></select>'+
+    '<select><option>equals</option><option>not equals</option><option>contains</option><option>greater than</option><option>less than</option></select>'+
+    '<input type="text" placeholder="value" style="flex:1;">'+
+    '<button class="btn btn-secondary btn-sm" onclick="removeEvtCondition(this)">✕</button>';
+  builder.insertBefore(row, addBtn);
+}
+function removeEvtCondition(btn){
+  var row = btn.closest('.cond-row');
+  if(row) row.remove();
 }
 function toggleNewRule(){
   var f=document.getElementById('new-rule-form');

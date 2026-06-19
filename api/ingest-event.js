@@ -8,7 +8,7 @@
 //
 //  Example:
 //    POST /api/ingest-event
-//    { workspace_id:"...", user_id:"...", event:"order_placed", properties:{amount:1200} }
+//    { workspace_id:"...", user_id:"9876543210", event:"order_placed", properties:{amount:1200} }
 // ═══════════════════════════════════════════════════
 
 const { createClient } = require('@supabase/supabase-js');
@@ -37,49 +37,68 @@ module.exports = async function handler(req, res) {
 
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 1. Upsert contact (create if first time seen)
-  const { data: contact, error: contactErr } = await db
-    .from('contacts')
-    .upsert({
-      workspace_id,
-      phone: properties.phone || user_id,
-      first_name: properties.first_name,
-      email: properties.email,
-      city: properties.city,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'workspace_id,phone', ignoreDuplicates: false })
-    .select()
-    .single();
+  // 1. Resolve contact — try INSERT, fall back to SELECT on conflict
+  const phone = properties.phone || user_id;
+  let contactId = null;
 
-  if (contactErr || !contact) {
-    // Try a plain lookup if upsert failed
-    const { data: existing } = await db.from('contacts')
-      .select('*').eq('workspace_id', workspace_id).eq('phone', properties.phone || user_id).single();
-    if (!existing) return res.status(500).json({ error: 'Could not find or create contact' });
+  // First try to find an existing contact
+  const { data: existing } = await db.from('contacts')
+    .select('id')
+    .eq('workspace_id', workspace_id)
+    .eq('phone', phone)
+    .maybeSingle();
+
+  if (existing) {
+    contactId = existing.id;
+    // Update known fields
+    const updates = { updated_at: new Date().toISOString() };
+    if (properties.first_name) updates.first_name = properties.first_name;
+    if (properties.email)      updates.email      = properties.email;
+    if (properties.city)       updates.city       = properties.city;
+    await db.from('contacts').update(updates).eq('id', contactId);
+  } else {
+    // Insert new contact
+    const { data: created, error: insertErr } = await db.from('contacts').insert({
+      workspace_id,
+      phone,
+      first_name: properties.first_name || null,
+      email:      properties.email      || null,
+      city:       properties.city       || null,
+      opted_out:  false,
+      updated_at: new Date().toISOString()
+    }).select('id').single();
+
+    if (!insertErr && created) {
+      contactId = created.id;
+    } else {
+      // Race condition: another request inserted the same contact — try lookup again
+      const { data: retry } = await db.from('contacts')
+        .select('id').eq('workspace_id', workspace_id).eq('phone', phone).maybeSingle();
+      if (retry) contactId = retry.id;
+      // If still null, log event without contact (orphan event — visible in log)
+    }
   }
 
-  const contactId = (contact || {}).id;
-
-  // 2. Log the raw event
-  await db.from('events').insert({
+  // 2. Log the raw event (contact_id may be null for unknown phones)
+  const { data: evtRow } = await db.from('events').insert({
     workspace_id,
-    contact_id: contactId,
-    event_name: eventName,
+    contact_id:  contactId,
+    event_name:  eventName,
     properties,
-    source: 'api'
-  });
+    source:      req.headers['x-source'] || 'api'
+  }).select('id').single();
 
-  // 3. Fetch matching attribute rules for this event
+  // 3. Apply matching attribute rules
   const { data: rules } = await db
     .from('attribute_rules')
     .select('*')
     .eq('workspace_id', workspace_id)
     .eq('event_name', eventName);
 
+  let rulesApplied = 0;
   if (rules && rules.length && contactId) {
-    // Build attribute updates
-    const { data: existing } = await db.from('contacts').select('attributes').eq('id', contactId).single();
-    const attrs = (existing || {}).attributes || {};
+    const { data: cRow } = await db.from('contacts').select('attributes').eq('id', contactId).single();
+    const attrs = (cRow || {}).attributes || {};
 
     for (const rule of rules) {
       const key = rule.attribute_key;
@@ -93,14 +112,21 @@ module.exports = async function handler(req, res) {
         const propKey = expr.replace('event.', '');
         attrs[key] = properties[propKey] ?? null;
       } else {
-        attrs[key] = expr; // literal value e.g. '1', 'true'
+        attrs[key] = expr;
       }
     }
 
     await db.from('contacts')
       .update({ attributes: attrs, updated_at: new Date().toISOString() })
       .eq('id', contactId);
+    rulesApplied = rules.length;
   }
 
-  return res.status(200).json({ ok: true, contact_id: contactId, event: eventName, rules_applied: (rules || []).length });
+  return res.status(200).json({
+    ok: true,
+    contact_id:    contactId,
+    event:         eventName,
+    event_id:      (evtRow || {}).id || null,
+    rules_applied: rulesApplied
+  });
 };
