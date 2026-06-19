@@ -3608,10 +3608,12 @@ function openTestModal(){
   var msg = _getTestMessage();
   var prev = document.getElementById('test-msg-preview');
   if(prev) prev.textContent = msg || '(no message yet — type one first)';
+  var chosen = vendorConnections.find(function(v){ return v.id === _wizardSelectedVendorId; });
+  var vendorLabel = chosen ? chosen.name : 'selected vendor';
   var sub = document.getElementById('test-modal-sub');
   if(sub) sub.textContent = _wizardChannel === 'WhatsApp'
-    ? 'Sends a real WhatsApp message via your selected vendor. Not tracked in analytics.'
-    : 'Sends a real SMS via your selected vendor. Uses actual credits.';
+    ? 'Sends a real WhatsApp message via '+vendorLabel+'. Not tracked in analytics.'
+    : 'Sends a real SMS via '+vendorLabel+'. Uses actual credits.';
   document.getElementById('test-result-box').style.display='none';
   var btn = document.getElementById('send-test-btn');
   if(btn){ btn.style.display=''; btn.textContent='Send Test'; btn.disabled=false; }
@@ -4359,8 +4361,17 @@ var vendorConnections = [];
 
 var _wizardSelectedVendorId = null;
 
+function _vendorHasRequiredCreds(v){
+  var cfg = (v && v.config) || {};
+  var nm = String((v && v.name) || '').toLowerCase();
+  var ch = v && v.channel;
+  if(ch === 'WhatsApp' && nm.includes('twilio')) return !!(cfg.account_sid && cfg.auth_token);
+  if(ch === 'WhatsApp' && nm.includes('meta')) return !!(cfg.phone_number_id || cfg.phone_number_id_ || cfg.permanent_access_token || cfg.access_token);
+  if(ch === 'SMS' && nm.includes('twilio')) return !!(cfg.account_sid || cfg.auth_token || cfg.account_sid_hint);
+  return true;
+}
+
 function renderVendorDropdown(){
-  // Keep hidden select in sync for legacy code reads
   var sel = document.getElementById('vendor-select');
   if(!sel) return;
   var active = vendorConnections.filter(function(v){return v.status==='active';});
@@ -4368,19 +4379,26 @@ function renderVendorDropdown(){
   active.forEach(function(v){ html += '<option value="'+v.id+'">'+v.name+' · '+v.sender+'</option>'; });
   sel.innerHTML = html;
 
-  // Render visual vendor picker cards
   var grid = document.getElementById('vendor-cards-grid');
   var noConn = document.getElementById('vendor-no-conn');
   var lbl = document.getElementById('vendor-section-label');
   if(!grid) return;
 
-  // Filter by currently selected channel
   var chEl = document.querySelector('.ch-card.selected');
-  var currentCh = chEl ? chEl.id : 'ch-sms'; // default SMS
+  var currentCh = chEl ? chEl.id : 'ch-sms';
   var matchChannel = currentCh === 'ch-wa' ? 'WhatsApp' : currentCh === 'ch-push' ? 'Push' : 'SMS';
   if(lbl) lbl.textContent = matchChannel + ' Vendor Connection';
 
   var filtered = active.filter(function(v){return v.channel === matchChannel;});
+  filtered.sort(function(a,b){
+    var an = String(a.name||'').toLowerCase();
+    var bn = String(b.name||'').toLowerCase();
+    var as = (matchChannel==='WhatsApp' && an.includes('twilio')) ? -100 : 0;
+    var bs = (matchChannel==='WhatsApp' && bn.includes('twilio')) ? -100 : 0;
+    as += _vendorHasRequiredCreds(a) ? -10 : 10;
+    bs += _vendorHasRequiredCreds(b) ? -10 : 10;
+    return as - bs || an.localeCompare(bn);
+  });
 
   if(filtered.length === 0){
     grid.innerHTML = '';
@@ -4389,19 +4407,21 @@ function renderVendorDropdown(){
   }
   if(noConn) noConn.style.display = 'none';
 
+  var selectedStillValid = filtered.some(function(v){ return v.id === _wizardSelectedVendorId; });
+  if(!selectedStillValid) _wizardSelectedVendorId = filtered[0].id;
+
   grid.innerHTML = filtered.map(function(v){
     var isSelected = v.id === _wizardSelectedVendorId;
+    var missing = !_vendorHasRequiredCreds(v) ? '<div class="vcard-trial" style="background:#fff1f2;color:#be123c;">Needs setup</div>' : '';
     return '<div class="vcard'+(isSelected?' selected':'')+'" onclick="selectWizardVendor(\''+v.id+'\')">'+
       '<div class="vcard-name">'+v.name+'</div>'+
       '<div class="vcard-sender">Sender: '+v.sender+'</div>'+
+      missing+
       (v.trial ? '<div class="vcard-trial">⚠ Trial</div>' : '')+
     '</div>';
   }).join('');
 
-  // Auto-select first if nothing selected yet
-  if(!_wizardSelectedVendorId && filtered.length){
-    selectWizardVendor(filtered[0].id);
-  }
+  if(_wizardSelectedVendorId) selectWizardVendor(_wizardSelectedVendorId);
 }
 
 function selectWizardVendor(id){
