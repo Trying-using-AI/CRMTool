@@ -122,11 +122,66 @@ module.exports = async function handler(req, res) {
     rulesApplied = rules.length;
   }
 
+  // 4. Queue event-triggered campaigns (if campaign_queue table exists)
+  let queued = 0;
+  if (contactId) {
+    try {
+      const { data: triggerCampaigns } = await db.from('campaigns')
+        .select('id, trigger_event, trigger_conditions, delay_amount, delay_unit')
+        .eq('workspace_id', workspace_id)
+        .eq('trigger_event', eventName)
+        .eq('status', 'active');
+
+      for (const camp of (triggerCampaigns || [])) {
+        // Check additional conditions against contact properties
+        const { data: cData } = await db.from('contacts').select('*').eq('id', contactId).single();
+        if (!cData) continue;
+
+        const conditions = Array.isArray(camp.trigger_conditions) ? camp.trigger_conditions : [];
+        let pass = true;
+        for (const cond of conditions) {
+          const contactVal = String(cData[cond.field] || (cData.attributes || {})[cond.field] || '');
+          const condVal    = String(cond.value || '');
+          if (cond.op === 'equals'     && contactVal.toLowerCase() !== condVal.toLowerCase()) { pass = false; break; }
+          if (cond.op === 'not equals' && contactVal.toLowerCase() === condVal.toLowerCase()) { pass = false; break; }
+          if (cond.op === 'contains'   && !contactVal.toLowerCase().includes(condVal.toLowerCase())) { pass = false; break; }
+          if (cond.op === 'greater than' && parseFloat(contactVal) <= parseFloat(condVal)) { pass = false; break; }
+          if (cond.op === 'less than'    && parseFloat(contactVal) >= parseFloat(condVal)) { pass = false; break; }
+        }
+        if (!pass) continue;
+
+        // Calculate fire_at based on delay
+        let fireAt = new Date();
+        const amount = parseInt(camp.delay_amount) || 0;
+        const unit   = (camp.delay_unit || 'immediately').toLowerCase();
+        if (amount > 0 && unit !== 'immediately') {
+          const msMap = { minutes: 60000, hours: 3600000, days: 86400000 };
+          fireAt = new Date(Date.now() + amount * (msMap[unit] || 0));
+        }
+
+        // Check not already queued for this campaign+contact combo
+        const { data: existing } = await db.from('campaign_queue')
+          .select('id').eq('campaign_id', camp.id).eq('contact_id', contactId)
+          .eq('status', 'pending').maybeSingle();
+        if (existing) continue;
+
+        await db.from('campaign_queue').insert({
+          workspace_id, campaign_id: camp.id, contact_id: contactId,
+          fire_at: fireAt.toISOString(), status: 'pending'
+        });
+        queued++;
+      }
+    } catch (e) {
+      // campaign_queue table may not exist yet — silently skip
+    }
+  }
+
   return res.status(200).json({
     ok: true,
     contact_id:    contactId,
     event:         eventName,
     event_id:      (evtRow || {}).id || null,
-    rules_applied: rulesApplied
+    rules_applied: rulesApplied,
+    campaigns_queued: queued
   });
 };

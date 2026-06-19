@@ -33,6 +33,7 @@ function seedUid(shortId){
 }
 // 32-char alphanumeric uid derived from a Supabase UUID (stable across devices)
 function dbUid(uuid){ return String(uuid).replace(/-/g,''); }
+function _getVisitorId(){ var k='ping_vid'; var id=localStorage.getItem(k); if(!id){ id='v'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem(k,id); } return id; }
 function ensureUid(item){
   if(!item.uid){
     var id=String(item.id||'');
@@ -2659,6 +2660,10 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
 
       <!-- WhatsApp vendors -->
       <div id="vendor-wa-opts" style="display:none;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">
+        <div class="vendor-opt ch-card" data-v="twilio-wa" onclick="selectVendorOpt(this,'twilio-wa')" style="padding:14px;cursor:pointer;border:2px solid #25d366;">
+          <div style="font-weight:700;font-size:14px;margin-bottom:2px;">Twilio WA Sandbox</div>
+          <div style="font-size:11px;color:#25d366;">✓ Easiest to test</div>
+        </div>
         <div class="vendor-opt ch-card selected" data-v="meta" onclick="selectVendorOpt(this,'meta')" style="padding:14px;cursor:pointer;">
           <div style="font-weight:700;font-size:14px;margin-bottom:2px;">Meta Cloud API</div>
           <div style="font-size:11px;color:#888;">Official · Direct</div>
@@ -2677,7 +2682,7 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
         </div>
       </div>
       <div id="wa-vendor-note" style="display:none;background:#e8fdf0;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;font-size:12px;color:#065f46;margin-bottom:16px;">
-        WhatsApp requires a verified <strong>WhatsApp Business Account (WABA)</strong> approved by Meta. Templates must be pre-approved before sending. <a href="#" style="color:#065f46;">Learn more →</a>
+        WhatsApp requires a verified <strong>WhatsApp Business Account (WABA)</strong> approved by Meta. Templates must be pre-approved before sending.
       </div>
 
       <!-- Push vendors -->
@@ -2745,6 +2750,18 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
         <div class="form-group"><label class="form-lbl">Body Template (JSON)</label>
           <textarea class="msg-textarea" style="min-height:80px;font-family:monospace;font-size:12px;">{"to":"{{phone}}","message":"{{text}}","sender":"{{sender_id}}"}</textarea>
           <div class="helper-text">Use {{phone}}, {{text}}, {{sender_id}} as placeholders. PingCRM fills these at send time.</div>
+        </div>
+      </div>
+
+      <!-- Twilio WhatsApp Sandbox -->
+      <div id="creds-twilio-wa" style="display:none;">
+        <div style="background:#e8fdf5;border:1px solid #6ee7b7;border-radius:8px;padding:11px 14px;font-size:12px;color:#065f46;margin-bottom:14px;">
+          <strong>Sandbox mode</strong> — participants must first text <code>join goes-jar</code> to <code>+1 415 523 8886</code>.<br>
+          Account SID &amp; Auth Token are read from server environment variables (already configured). Only the from-number is needed here.
+        </div>
+        <div class="form-group"><label class="form-lbl">WhatsApp From (sandbox number)</label><input class="form-input" id="twilio-wa-from" value="whatsapp:+14155238886" placeholder="whatsapp:+14155238886"></div>
+        <div style="background:#f9f9f9;border-radius:8px;padding:10px 14px;font-size:12px;color:#888;">
+          Messages will be sent as plain text — no template approval needed in sandbox mode.
         </div>
       </div>
 
@@ -3148,6 +3165,13 @@ function go(s, opts){
   if(s==='dashboard') renderDashboard();
   if(s==='settings'){ renderTeamMembers(); loadSendingLimits(); }
   if(s==='events'){ _evtLoaded=false; loadEventsData(); }
+  // Track page view — fires to the real ingestion pipeline
+  try {
+    var vid = _getVisitorId();
+    fetch('/api/ingest-event',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({workspace_id:WORKSPACE,user_id:vid,event:'page_view',
+        properties:{page:s,phone:vid}})});
+  } catch(e){}
   // Update the URL — detail views (campaign / draft / segment) manage their own
   // path-based URLs, so skip the rewrite for them.
   if(opts && opts.keepUrl) return;
@@ -3461,7 +3485,9 @@ function selectChannel(ch){
 }
 
 // ─── Audience mode ───
+var _audienceMode = 'segment';
 function setAudienceMode(m){
+  _audienceMode = m;
   document.getElementById('tab-seg').classList.toggle('active',m==='segment');
   document.getElementById('tab-evt').classList.toggle('active',m==='event');
   document.getElementById('mode-segment').style.display=m==='segment'?'block':'none';
@@ -3776,12 +3802,36 @@ async function saveDraft(){
 
   // Persist to Supabase so the draft (and its link) works on any device
   try {
+    // Collect event-trigger fields
+    var triggerFields = {};
+    if(_audienceMode === 'event'){
+      var evtSel = document.querySelector('#mode-event select');
+      var delayAmt = document.querySelector('#mode-event input[type="number"]');
+      var delayUnit = document.querySelector('#mode-event select:last-of-type');
+      var conditions = [];
+      document.querySelectorAll('#evt-cond-builder .cond-row').forEach(function(row){
+        var sels = row.querySelectorAll('select');
+        var inp  = row.querySelector('input[type="text"]');
+        if(sels[0] && inp && inp.value) conditions.push({field:sels[0].value, op:sels[1]?sels[1].value:'equals', value:inp.value});
+      });
+      triggerFields = {
+        audience_mode: 'event',
+        trigger_event: evtSel ? evtSel.value : '',
+        trigger_conditions: conditions,
+        delay_amount: delayAmt ? parseInt(delayAmt.value)||0 : 0,
+        delay_unit: delayUnit ? delayUnit.value : 'immediately'
+      };
+    } else {
+      triggerFields = { audience_mode: 'segment' };
+    }
+
     if(/^[0-9a-f]{8}-/.test(String(c.id))){
-      await db.from('campaigns').update({ name:name, message_a:msgA, meta:c.meta }).eq('id', c.id);
+      await db.from('campaigns').update({ name:name, message_a:msgA, meta:c.meta, ...triggerFields }).eq('id', c.id);
     } else {
       var { data: row, error } = await db.from('campaigns').insert({
         workspace_id: WORKSPACE, name: name, channel: c.channel, status: 'draft',
-        message_a: msgA, meta: c.meta, sent: 0, delivered: 0, clicked: 0, failed: 0
+        message_a: msgA, meta: c.meta, sent: 0, delivered: 0, clicked: 0, failed: 0,
+        ...triggerFields
       }).select().single();
       if(!error && row){
         c.id = row.id; c.uid = dbUid(row.id); currentCampId = row.id;
@@ -4555,7 +4605,8 @@ function setVendorChannel(ch){
   document.getElementById('vendor-sms-opts').style.display = ch==='sms'?'grid':'none';
   var waOpts = document.getElementById('vendor-wa-opts');
   waOpts.style.display = ch==='wa'?'grid':'none';
-  document.getElementById('wa-vendor-note').style.display = ch==='wa'?'block':'none';
+  // Note is only for non-Twilio WA vendors; hidden by selectVendorOpt for twilio-wa
+  document.getElementById('wa-vendor-note').style.display = 'none';
   var pushOpts = document.getElementById('vendor-push-opts');
   if(pushOpts) pushOpts.style.display = ch==='push'?'grid':'none';
   var pushNote = document.getElementById('push-vendor-note');
@@ -4574,16 +4625,19 @@ function selectVendorOpt(el,v){
   // deselect within same group only
   el.closest('div[id]').querySelectorAll('.vendor-opt').forEach(function(x){x.classList.remove('selected');});
   el.classList.add('selected');
-  var waVendors = ['meta','gupshup-wa','360dialog','kaleyra-wa'];
+  var waNote = document.getElementById('wa-vendor-note');
+  if(waNote) waNote.style.display = (v==='meta'||v==='gupshup-wa'||v==='360dialog'||v==='kaleyra-wa')?'block':'none';
+  var waVendors = ['meta','gupshup-wa','360dialog','kaleyra-wa','twilio-wa'];
   var credMap = {
     twilio:'creds-twilio', msg91:'creds-msg91',
     'gupshup-sms':'creds-generic', kaleyra:'creds-generic', exotel:'creds-generic',
     custom:'creds-custom',
+    'twilio-wa':'creds-twilio-wa',
     meta:'creds-meta',
     'gupshup-wa':'creds-wa-bsp','360dialog':'creds-wa-bsp','kaleyra-wa':'creds-wa-bsp',
     fcm:'creds-fcm', apns:'creds-apns', onesignal:'creds-onesignal'
   };
-  ['creds-twilio','creds-msg91','creds-generic','creds-custom','creds-meta','creds-wa-bsp','creds-fcm','creds-apns','creds-onesignal'].forEach(function(x){
+  ['creds-twilio','creds-twilio-wa','creds-msg91','creds-generic','creds-custom','creds-meta','creds-wa-bsp','creds-fcm','creds-apns','creds-onesignal'].forEach(function(x){
     var e=document.getElementById(x); if(e) e.style.display='none';
   });
   var show = credMap[v]||'creds-generic';
