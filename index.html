@@ -4407,8 +4407,17 @@ function renderVendorDropdown(){
   }
   if(noConn) noConn.style.display = 'none';
 
-  var selectedStillValid = filtered.some(function(v){ return v.id === _wizardSelectedVendorId; });
-  if(!selectedStillValid) _wizardSelectedVendorId = filtered[0].id;
+  var preferred = filtered[0];
+  var selected = filtered.find(function(v){ return v.id === _wizardSelectedVendorId; });
+  var selectedIsGood = !!selected;
+  if(matchChannel === WhatsApp){
+    var selectedName = String((selected && selected.name) || ).toLowerCase();
+    var preferredName = String((preferred && preferred.name) || ).toLowerCase();
+    var selectedIsTwilio = selectedName.includes(twilio) && _vendorHasRequiredCreds(selected);
+    var preferredIsTwilio = preferredName.includes(twilio) && _vendorHasRequiredCreds(preferred);
+    if(preferredIsTwilio && !selectedIsTwilio) selectedIsGood = false;
+  }
+  if(!selectedIsGood) _wizardSelectedVendorId = preferred.id;
 
   grid.innerHTML = filtered.map(function(v){
     var isSelected = v.id === _wizardSelectedVendorId;
