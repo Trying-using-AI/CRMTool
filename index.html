@@ -2573,24 +2573,18 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
 <div class="modal-overlay" id="test-modal">
   <div class="modal">
     <div class="modal-title">Send test message</div>
-    <div class="modal-sub">Sends a real SMS via your connected vendor. Uses actual credits and is not tracked in analytics.</div>
+    <div class="modal-sub" id="test-modal-sub">Sends a real message via your selected vendor. Uses actual credits, not tracked in analytics.</div>
     <div class="form-group">
       <label class="form-lbl">Mobile number</label>
-      <input class="form-input" type="tel" id="modal-phone" placeholder="+91 98765 43210" value="+91 98765 43210">
-      <div class="helper-text">Use E.164 format: +91XXXXXXXXXX</div>
+      <input class="form-input" type="tel" id="modal-phone" placeholder="+919860918398">
+      <div class="helper-text">Include country code, no spaces — e.g. +919860918398</div>
     </div>
     <div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;line-height:1.5;">
-      <strong>Message preview:</strong><br>"Hi Priya! 🎉 Your exclusive coupon SAVE20 expires on May 15. Shop now at acme.co/sale — Reply STOP to opt out."
-    </div>
-    <!-- Simulate error toggle — wireframe only -->
-    <div style="margin-top:14px;padding:10px 12px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:10px;">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#795548;">
-        <input type="checkbox" id="simulate-error"> Simulate delivery failure (wireframe demo)
-      </label>
+      <strong>Message:</strong><br><span id="test-msg-preview">—</span>
     </div>
     <div id="test-result-box" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;"></div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeTestModal()">Close</button>
+      <button class="btn btn-secondary" onclick="closeTestModal()">Cancel</button>
       <button class="btn btn-primary" id="send-test-btn" onclick="confirmTestSend()">Send Test</button>
     </div>
   </div>
@@ -3599,32 +3593,73 @@ var smsErrors = [
   {code:'DLT-403', msg:'DLT Template ID mismatch. The message content does not match the approved template registered on your DLT portal.'},
   {code:'30008', msg:'Unknown error from carrier. The message was submitted but carrier did not confirm delivery. Retry after 10 minutes.'}
 ];
+function _getTestMessage(){
+  if(_wizardChannel === 'WhatsApp'){
+    return _wizardVendorType === 'twilio'
+      ? ((document.getElementById('twilio-wa-body')||{}).value||'')
+      : ((document.getElementById('wa-body')||{}).value||'');
+  }
+  return (document.getElementById('sms-body-a')||{}).value||'';
+}
+
 function openTestModal(){
-  var ph=document.getElementById('test-phone-input').value;
-  if(ph) document.getElementById('modal-phone').value=ph;
+  var ph = document.getElementById('test-phone-input').value;
+  if(ph) document.getElementById('modal-phone').value = ph;
+  var msg = _getTestMessage();
+  var prev = document.getElementById('test-msg-preview');
+  if(prev) prev.textContent = msg || '(no message yet — type one first)';
+  var sub = document.getElementById('test-modal-sub');
+  if(sub) sub.textContent = _wizardChannel === 'WhatsApp'
+    ? 'Sends a real WhatsApp message via your selected vendor. Not tracked in analytics.'
+    : 'Sends a real SMS via your selected vendor. Uses actual credits.';
   document.getElementById('test-result-box').style.display='none';
-  document.getElementById('send-test-btn').style.display='';
+  var btn = document.getElementById('send-test-btn');
+  if(btn){ btn.style.display=''; btn.textContent='Send Test'; btn.disabled=false; }
   document.getElementById('test-modal').classList.add('open');
 }
+
 function closeTestModal(){document.getElementById('test-modal').classList.remove('open');}
-function confirmTestSend(){
-  var ph=document.getElementById('modal-phone').value.trim()||'+91 98765 43210';
-  var simulateErr=document.getElementById('simulate-error').checked;
-  var resultBox=document.getElementById('test-result-box');
-  resultBox.style.display='block';
-  if(simulateErr){
-    var err=smsErrors[Math.floor(Math.random()*smsErrors.length)];
-    resultBox.style.background='#fff0f0';
-    resultBox.style.border='1px solid #fcc';
-    resultBox.style.color='#c62828';
-    resultBox.innerHTML='<strong>✗ Delivery failed</strong> &nbsp;<span style="background:#fcc;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;">Error '+err.code+'</span><br><span style="font-size:12px;margin-top:6px;display:block;color:#555;">'+err.msg+'</span><div style="font-size:11px;color:#aaa;margin-top:8px;">Source: Twilio vendor response · '+new Date().toLocaleTimeString()+'</div>';
-    document.getElementById('send-test-btn').textContent='Retry';
-  } else {
-    resultBox.style.background='#e6f9f0';
-    resultBox.style.border='1px solid #bbf7d0';
-    resultBox.style.color='#065f46';
-    resultBox.innerHTML='<strong>✓ Message sent to '+ph+'</strong><div style="font-size:12px;color:#555;margin-top:6px;">Delivered via Twilio · Sender: ACMECO · '+new Date().toLocaleTimeString()+'</div>';
-    document.getElementById('send-test-btn').style.display='none';
+
+async function confirmTestSend(){
+  var ph = (document.getElementById('modal-phone').value||'').trim();
+  if(!ph){ showToast('Enter a phone number first'); return; }
+  if(!_wizardSelectedVendorId){ showToast('No vendor selected — go back to step 1 and pick a vendor'); return; }
+  var msg = _getTestMessage();
+  if(!msg){ showToast('Message is empty — type something first'); return; }
+
+  var btn = document.getElementById('send-test-btn');
+  var resultBox = document.getElementById('test-result-box');
+  btn.textContent = 'Sending…'; btn.disabled = true;
+  resultBox.style.display = 'none';
+
+  try {
+    var resp = await fetch('/api/send-test', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        workspace_id: WORKSPACE,
+        vendor_id: _wizardSelectedVendorId,
+        channel: _wizardChannel,
+        phone: ph.replace(/\s/g,''),
+        message: msg
+      })
+    });
+    var json = await resp.json();
+    resultBox.style.display = 'block';
+    if(json.success){
+      resultBox.style.cssText = 'display:block;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;background:#e6f9f0;border:1px solid #bbf7d0;color:#065f46;';
+      resultBox.innerHTML = '<strong>✓ Sent!</strong> Message ID: '+json.sid+'<div style="font-size:11px;color:#065f46;opacity:.7;margin-top:4px;">Check '+ph+' — may take a few seconds to arrive.</div>';
+      btn.style.display = 'none';
+    } else {
+      resultBox.style.cssText = 'display:block;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;background:#fff0f0;border:1px solid #fcc;color:#c62828;';
+      resultBox.innerHTML = '<strong>✗ Failed:</strong> '+(json.error||'Unknown error')+'<div style="font-size:11px;color:#c62828;opacity:.7;margin-top:4px;">Check that your Account SID and Auth Token are correct in vendor settings.</div>';
+      btn.textContent = 'Retry'; btn.disabled = false;
+    }
+  } catch(e){
+    resultBox.style.display = 'block';
+    resultBox.style.cssText = 'display:block;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;background:#fff0f0;border:1px solid #fcc;color:#c62828;';
+    resultBox.innerHTML = '<strong>✗ Network error:</strong> '+e.message;
+    btn.textContent = 'Retry'; btn.disabled = false;
   }
 }
 
@@ -3735,6 +3770,11 @@ async function sendCampaign(){
   var name = document.getElementById('camp-name-input').value || 'New Campaign';
   var ch = _wizardChannel || 'SMS';
   var msgA = (document.getElementById('sms-body-a') || {}).value || '';
+  if(ch === 'WhatsApp'){
+    msgA = _wizardVendorType === 'twilio'
+      ? ((document.getElementById('twilio-wa-body')||{}).value||'')
+      : ((document.getElementById('wa-body')||{}).value||'');
+  }
   var newCamp = {
     id:'__pending__', name:name,
     meta:'Segment: All Users · Sending now',
