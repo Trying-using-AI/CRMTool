@@ -196,7 +196,13 @@ module.exports = async function handler(req, res) {
           errMsg = 'Unknown SMS vendor; marked sent without dispatch';
         }
       } else if (ch === 'whatsapp') {
-        const r = await sendViaMetaWA(vCfg, contact.phone, campaign);
+        const vName = vendor ? (vendor.name || '').toLowerCase() : '';
+        let r;
+        if (vName.includes('twilio')) {
+          r = await sendViaTwilioWA(vCfg, contact.phone, campaign);
+        } else {
+          r = await sendViaMetaWA(vCfg, contact.phone, campaign);
+        }
         success = r.success; vendorMsgId = r.msgId; errMsg = r.error;
       } else if (ch === 'push') {
         const vName = vendor ? (vendor.name || '').toLowerCase() : '';
@@ -274,6 +280,32 @@ async function sendViaTwilio(senderId, toPhone, body) {
   const json = await resp.json();
   if (json.sid) return { success: true, sid: json.sid };
   return { success: false, error: json.message || 'Twilio error' };
+}
+
+// ── WhatsApp: Twilio Sandbox / Production ────────
+async function sendViaTwilioWA(cfg, toPhone, campaign) {
+  const sid   = cfg.account_sid  || cfg.twilio_account_sid  || TWILIO_SID;
+  const token = cfg.auth_token   || cfg.twilio_auth_token   || TWILIO_TOKEN;
+  // Sandbox uses +14155238886; production uses a purchased Twilio WA number
+  const from  = cfg.whatsapp_from || cfg.from_number || process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
+
+  if (!sid || !token) return { success: false, error: 'Twilio SID/token not configured' };
+
+  const to  = 'whatsapp:+' + toPhone.replace(/^\+/, '').replace(/\D/g, '');
+  const body = campaign.wa_body || campaign.message_a || '';
+
+  const url  = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ From: from, To: to, Body: body }).toString()
+  });
+  const json = await resp.json();
+  if (json.sid) return { success: true, msgId: json.sid };
+  return { success: false, error: json.message || `Twilio WA error ${resp.status}` };
 }
 
 // ── SMS: MSG91 ───────────────────────────────────
