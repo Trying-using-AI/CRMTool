@@ -4410,11 +4410,11 @@ function renderVendorDropdown(){
   var preferred = filtered[0];
   var selected = filtered.find(function(v){ return v.id === _wizardSelectedVendorId; });
   var selectedIsGood = !!selected;
-  if(matchChannel === WhatsApp){
-    var selectedName = String((selected && selected.name) || ).toLowerCase();
-    var preferredName = String((preferred && preferred.name) || ).toLowerCase();
-    var selectedIsTwilio = selectedName.includes(twilio) && _vendorHasRequiredCreds(selected);
-    var preferredIsTwilio = preferredName.includes(twilio) && _vendorHasRequiredCreds(preferred);
+  if(matchChannel === "WhatsApp"){
+    var selectedName = String((selected && selected.name) || "").toLowerCase();
+    var preferredName = String((preferred && preferred.name) || "").toLowerCase();
+    var selectedIsTwilio = selectedName.includes("twilio") && _vendorHasRequiredCreds(selected);
+    var preferredIsTwilio = preferredName.includes("twilio") && _vendorHasRequiredCreds(preferred);
     if(preferredIsTwilio && !selectedIsTwilio) selectedIsGood = false;
   }
   if(!selectedIsGood) _wizardSelectedVendorId = preferred.id;
