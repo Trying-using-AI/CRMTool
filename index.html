@@ -907,10 +907,17 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
 
     <!-- Variant A -->
     <div id="variant-a-pane">
-      <div class="form-group">
-        <label class="form-lbl">DLT Template ID <span style="color:#ef4444;">*</span></label>
-        <input class="form-input" type="text" id="tpl-id-a" placeholder="e.g. 1107162418527002777" value="1107162418527002777">
-        <div class="helper-text">Required for SMS delivery in India. Find this in your DLT portal (Airtel, Jio, Vi, BSNL, etc.)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="form-group">
+          <label class="form-lbl">Sender Name <span style="color:#ef4444;">*</span></label>
+          <input class="form-input" type="text" id="sms-sender-name" placeholder="e.g. ACMECO" maxlength="11">
+          <div class="helper-text">6-character DLT-registered header (e.g. ACMECO, FKART, SWIGGY)</div>
+        </div>
+        <div class="form-group">
+          <label class="form-lbl">DLT Template ID <span style="color:#ef4444;">*</span></label>
+          <input class="form-input" type="text" id="tpl-id-a" placeholder="e.g. 1107162418527002777">
+          <div class="helper-text">Required for India SMS. Find in your DLT portal.</div>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-lbl">Message</label>
@@ -4308,11 +4315,7 @@ function showToast(msg){
 }
 
 // ─── Vendor connections (single source of truth) ───
-var vendorConnections = [
-  {id:'v1', name:'Twilio',       channel:'SMS',       sender:'ACMECO',       status:'active', usedIn:4, connected:'May 2, 2026',  cred:'Account SID: AC••3f9e',    trial:true},
-  {id:'v2', name:'MSG91',        channel:'SMS',       sender:'ACMEBZ',       status:'active', usedIn:2, connected:'Apr 14, 2026', cred:'API Key: ••••8b2c',         trial:true},
-  {id:'v3', name:'Meta Cloud API', channel:'WhatsApp', sender:'+91 98100 00001', status:'active', usedIn:1, connected:'May 10, 2026', cred:'Phone ID: 1234••••5678', trial:true}
-];
+var vendorConnections = [];
 
 var _wizardSelectedVendorId = null;
 
@@ -4334,7 +4337,7 @@ function renderVendorDropdown(){
   // Filter by currently selected channel
   var chEl = document.querySelector('.ch-card.selected');
   var currentCh = chEl ? chEl.id : 'ch-sms'; // default SMS
-  var matchChannel = currentCh === 'ch-wa' ? 'WhatsApp' : 'SMS';
+  var matchChannel = currentCh === 'ch-wa' ? 'WhatsApp' : currentCh === 'ch-push' ? 'Push' : 'SMS';
   if(lbl) lbl.textContent = matchChannel + ' Vendor Connection';
 
   var filtered = active.filter(function(v){return v.channel === matchChannel;});
@@ -4754,28 +4757,24 @@ async function saveVendorConn(){
     cred: Object.keys(creds).slice(0,1).map(function(k){ return k+': ••••'+Object.values(creds)[0].slice(-4); }).join(', ')
   };
 
-  // Persist to Supabase
+  // Persist via server-side endpoint (uses service key to bypass RLS)
   try {
-    var { data: row, error } = await db.from('vendor_connections').insert({
-      workspace_id: WORKSPACE,
-      name: vendorName,
-      channel: channel,
-      sender_id: senderId || 'SENDER',
-      status: 'active',
-      config: creds,        // stored encrypted server-side in prod; anon key is read-only in prod
-      used_in: 0,
-      connected_at: new Date().toISOString()
-    }).select().single();
-    if(!error && row){
-      newConn.id = row.id;
+    var resp = await fetch('/api/save-vendor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: WORKSPACE, name: vendorName, channel, sender_id: senderId||'', config: creds })
+    });
+    var json = await resp.json();
+    if(json.ok && json.vendor){
+      newConn.id = json.vendor.id;
       showToast('✓ '+vendorName+' saved to workspace');
     } else {
-      console.warn('Vendor insert error:', error);
-      showToast('✓ '+vendorName+' added locally — DB write failed: '+(error&&error.message||''));
+      console.warn('Vendor save error:', json.error);
+      showToast('⚠ Could not save vendor: '+(json.error||'unknown error'));
     }
   } catch(e){
     console.warn('saveVendorConn exception:', e);
-    showToast('✓ '+vendorName+' added (offline mode)');
+    showToast('⚠ Network error saving vendor — check console');
   }
 
   vendorConnections.push(newConn);
