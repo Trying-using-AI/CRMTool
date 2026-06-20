@@ -103,13 +103,22 @@ async function loadFromSupabase(){
         return { id: s.id, uid: dbUid(s.id), name: s.name, rules: prettyRules(s.rules), rulesObj: s.rules, count: s.contact_count || 0, campaigns: 0, type: s.type };
       });
     }
-    // Vendor connections
-    const { data: vends } = await db.from('vendor_connections').select('*').eq('workspace_id', WORKSPACE);
-    if(vends && vends.length){
-      vendorConnections = vends.map(function(v){
-        return { id: v.id, name: v.name, channel: v.channel, sender: v.sender_id, status: v.status, trial: v.trial, usedIn: v.used_in, connected: new Date(v.connected_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}), cred: JSON.stringify(v.config).replace(/[{}"]/g,'') };
-      });
-    }
+    // Vendor connections — load via service-key endpoint to bypass RLS
+    try {
+      const vResp = await fetch('/api/get-vendors?workspace_id='+WORKSPACE);
+      const vJson = await vResp.json();
+      if(vJson.ok && vJson.vendors && vJson.vendors.length){
+        vendorConnections = vJson.vendors.map(function(v){
+          return {
+            id: v.id, name: v.name, channel: v.channel, sender: v.sender_id||'',
+            status: v.status, trial: !!v.trial, usedIn: v.used_in||0,
+            connected: v.connected_at ? new Date(v.connected_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—',
+            cred: v.has_creds ? '••••' : 'No credentials',
+            has_creds: !!v.has_creds
+          };
+        });
+      }
+    } catch(e){ console.warn('get-vendors failed:', e.message); }
     // Attribute rules
     const { data: rules } = await db.from('attribute_rules').select('*').eq('workspace_id', WORKSPACE);
     if(rules && rules.length){
@@ -1507,9 +1516,9 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
     </div>
     <div style="font-size:12px;color:#aaa;margin-top:4px;">Sent Oct 22, 2025 · 11:04 AM IST · Twilio (ACMECO) · Segment: Mumbai Coupon Clickers</div>
     <div class="analytics-actions">
-      <button class="btn btn-secondary btn-sm" onclick="editCampaign('diwali')">⧉ Duplicate</button>
-      <button class="btn btn-secondary btn-sm">⬇ Export CSV</button>
-      <button class="btn btn-danger btn-sm">🗄 Archive</button>
+      <button class="btn btn-secondary btn-sm" id="analytics-dup-btn" onclick="">⧉ Duplicate</button>
+      <button class="btn btn-secondary btn-sm" id="analytics-export-btn" onclick="">⬇ Export CSV</button>
+      <button class="btn btn-danger btn-sm" id="analytics-archive-btn" onclick="">🗄 Archive</button>
     </div>
   </div>
   <div class="content">
@@ -3337,6 +3346,14 @@ async function viewAnalytics(id){
   var subEl = document.querySelector('#screen-analytics .analytics-header [style*="font-size:12px"]');
   if(subEl) subEl.textContent = c.meta || '—';
 
+  // Wire up action buttons to this campaign
+  var dupBtn = document.getElementById('analytics-dup-btn');
+  if(dupBtn) dupBtn.onclick = function(){ activeDDId = id; ddDuplicate(); };
+  var expBtn = document.getElementById('analytics-export-btn');
+  if(expBtn) expBtn.onclick = function(){ exportCampaignCSV(id); };
+  var archBtn = document.getElementById('analytics-archive-btn');
+  if(archBtn) archBtn.onclick = function(){ archiveCampaign(id); };
+
   // ── Load real delivery data from Supabase ──
   // Hide A/B section until we confirm real variant data
   var abSection = document.getElementById('ab-section');
@@ -3497,7 +3514,38 @@ async function ddDuplicate(){
   if(bodyEl) bodyEl.value = copy.content||'';
   showToast('Duplicated — now editing "'+copy.name+'"');
 }
-function ddArchive(){showToast('Campaign archived');closeDD();}
+function ddArchive(){ archiveCampaign(activeDDId); closeDD(); }
+
+async function archiveCampaign(id){
+  if(!id){ showToast('No campaign selected'); return; }
+  var c = campaigns.find(function(x){ return x.id===id; });
+  if(!c){ showToast('Campaign not found'); return; }
+  c.status = 'archived';
+  renderCampaigns();
+  try {
+    if(/^[0-9a-f]{8}-/.test(String(id))){
+      await db.from('campaigns').update({ status:'archived' }).eq('id', id);
+    }
+    showToast('Campaign archived');
+    go('campaign-list');
+  } catch(e){ showToast('Archived locally — DB update failed'); }
+}
+
+function exportCampaignCSV(id){
+  var c = campaigns.find(function(x){ return x.id===id; });
+  if(!c){ showToast('Campaign not found'); return; }
+  var rows = [
+    ['Campaign Name','Channel','Status','Sent','Delivered','Delivery Rate','CTR'],
+    [c.name, c.channel||'SMS', c.status, c.sent||0, c.delivered||0, c.delRate||'—', c.ctr||'—']
+  ];
+  var csv = rows.map(function(r){ return r.map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','); }).join('\n');
+  var blob = new Blob([csv], {type:'text/csv'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (c.name||'campaign').replace(/[^a-z0-9]/gi,'_')+'_export.csv';
+  a.click();
+  showToast('CSV downloaded');
+}
 
 // ─── Channel selection ───
 function selectChannel(ch){
@@ -4362,13 +4410,9 @@ var vendorConnections = [];
 var _wizardSelectedVendorId = null;
 
 function _vendorHasRequiredCreds(v){
-  var cfg = (v && v.config) || {};
-  var nm = String((v && v.name) || '').toLowerCase();
-  var ch = v && v.channel;
-  if(ch === 'WhatsApp' && nm.includes('twilio')) return !!(cfg.account_sid && cfg.auth_token);
-  if(ch === 'WhatsApp' && nm.includes('meta')) return !!(cfg.phone_number_id || cfg.phone_number_id_ || cfg.permanent_access_token || cfg.access_token);
-  if(ch === 'SMS' && nm.includes('twilio')) return !!(cfg.account_sid || cfg.auth_token || cfg.account_sid_hint);
-  return true;
+  // has_creds is set by /api/get-vendors based on the actual config in DB
+  if(v && v.has_creds !== undefined) return !!v.has_creds;
+  return true; // assume OK if not set (e.g. freshly added before page reload)
 }
 
 function renderVendorDropdown(){
@@ -4384,9 +4428,8 @@ function renderVendorDropdown(){
   var lbl = document.getElementById('vendor-section-label');
   if(!grid) return;
 
-  var chEl = document.querySelector('.ch-card.selected');
-  var currentCh = chEl ? chEl.id : 'ch-sms';
-  var matchChannel = currentCh === 'ch-wa' ? 'WhatsApp' : currentCh === 'ch-push' ? 'Push' : 'SMS';
+  // Use _wizardChannel directly — DOM query was matching WA category cards (no id) and defaulting to SMS
+  var matchChannel = _wizardChannel === 'WhatsApp' ? 'WhatsApp' : _wizardChannel === 'Push' ? 'Push' : 'SMS';
   if(lbl) lbl.textContent = matchChannel + ' Vendor Connection';
 
   var filtered = active.filter(function(v){return v.channel === matchChannel;});
@@ -4931,9 +4974,10 @@ async function saveVendorConn(){
 
   var newConn = {
     id:'__pending__', name:vendorName, channel:channel,
-    sender: senderId||'SENDER', status:'active', usedIn:0, trial:false,
+    sender: senderId||'', status:'active', usedIn:0, trial:false,
     connected: new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
-    cred: Object.keys(creds).slice(0,1).map(function(k){ return k+': ••••'+Object.values(creds)[0].slice(-4); }).join(', ')
+    cred: '••••',
+    has_creds: Object.values(creds).some(function(v){ return v && v.length > 0; })
   };
 
   // Persist via server-side endpoint (uses service key to bypass RLS)
