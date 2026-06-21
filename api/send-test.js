@@ -33,6 +33,13 @@ module.exports = async function handler(req, res) {
   const ch  = (channel || vendor.channel || 'SMS').toLowerCase();
 
   if (ch === 'whatsapp') {
+    const vendorName = (vendor.name || '').toLowerCase();
+    if (!vendorName.includes('twilio')) {
+      return res.status(200).json({
+        success: false,
+        error: `Test sends via "${vendor.name}" are not supported yet. Go back to Step 1 and select your Twilio WhatsApp Sandbox vendor, then retry.`
+      });
+    }
     const result = await sendViaTwilioWA(cfg, phone, message);
     return res.status(200).json(result);
   } else {

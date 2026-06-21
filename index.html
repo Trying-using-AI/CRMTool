@@ -4833,6 +4833,26 @@ function openEditVendor(id){
   }
 }
 
+async function reloadVendors(){
+  try {
+    var r = await fetch('/api/get-vendors?workspace_id='+WORKSPACE);
+    var j = await r.json();
+    if(j.ok && j.vendors){
+      vendorConnections = j.vendors.map(function(v){
+        return {
+          id: v.id, name: v.name, channel: v.channel, sender: v.sender_id||'',
+          status: v.status, trial: !!v.trial, usedIn: v.used_in||0,
+          connected: v.connected_at ? new Date(v.connected_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—',
+          cred: v.has_creds ? '••••' : 'No credentials',
+          has_creds: !!v.has_creds
+        };
+      });
+      renderVendorCards();
+      renderVendorDropdown();
+    }
+  } catch(e){ console.warn('reloadVendors failed:', e.message); }
+}
+
 async function updateVendorConn(){
   if(!_currentEditVendorId){ showToast('No vendor selected for update'); return; }
   var creds = _collectVendorCreds();
@@ -4847,11 +4867,9 @@ async function updateVendorConn(){
     });
     var json = await resp.json();
     if(json.ok){
-      // Update local vendorConnections too
-      var v = vendorConnections.find(function(x){return x.id===_currentEditVendorId;});
-      if(v){ v.sender = senderId||v.sender; }
       showToast('✓ Vendor credentials updated');
       closeVendorModal();
+      reloadVendors(); // refresh has_creds flags so auto-selection picks up new credentials
     } else {
       showToast('Update failed: '+(json.error||'unknown'));
     }
@@ -5005,6 +5023,7 @@ async function saveVendorConn(){
   renderVendorDropdown();
   closeVendorModal();
   if(btn){ btn.textContent='Save Connection'; btn.disabled=false; }
+  reloadVendors(); // sync has_creds flags from DB so auto-selection is accurate
 }
 
 // ─── Auth ───
