@@ -59,17 +59,30 @@ module.exports = async function handler(req, res) {
     // Collect IDs of already-existing contacts
     (existing || []).forEach(function(c) { allContactIds.push(c.id); });
 
-    // Insert only new contacts
+    // Insert only new contacts — map CSV fields to actual DB column names
     const newRows = chunk
       .filter(function(c) { return !existingMap[c.phone]; })
       .map(function(c) {
-        return {
+        const extra = c.extra || {};
+        // Known direct columns
+        const row = {
           workspace_id,
-          phone: c.phone,
-          name:  c.name  || null,
-          email: c.email || null,
-          opted_out: false
+          phone:      c.phone,
+          first_name: c.name || extra.name || extra.first_name || null,
+          last_name:  extra.last_name || null,
+          email:      c.email || null,
+          city:       extra.city || null,
+          plan_type:  extra.plan_type || null,
+          opted_out:  false
         };
+        // Remaining extra fields go into attributes jsonb
+        const knownExtra = ['name','first_name','last_name','city','plan_type'];
+        const attrs = {};
+        Object.keys(extra).forEach(function(k) {
+          if (!knownExtra.includes(k) && extra[k]) attrs[k] = extra[k];
+        });
+        if (Object.keys(attrs).length > 0) row.attributes = attrs;
+        return row;
       });
 
     if (newRows.length > 0) {
