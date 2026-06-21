@@ -1776,7 +1776,7 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
       <div style="font-size:12px;color:#888;margin-bottom:14px;">Your file must follow this exact column structure. Download the template to get started.</div>
 
       <div style="display:flex;gap:10px;margin-bottom:14px;">
-        <button class="btn btn-secondary btn-sm" onclick="showToast('Template downloaded: pingcrm_import_template.csv')">⬇ Download template CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="downloadImportTemplate()">⬇ Download template CSV</button>
         <div style="font-size:12px;color:#aaa;align-self:center;">or match this format exactly:</div>
       </div>
 
@@ -1784,7 +1784,6 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
         <table class="sample-table">
           <thead>
             <tr>
-              <th>contact_id *</th>
               <th>phone *</th>
               <th>name</th>
               <th>email</th>
@@ -1795,16 +1794,16 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
             </tr>
           </thead>
           <tbody>
-            <tr><td>USR_001</td><td>+919876543210</td><td>Priya Sharma</td><td>priya@email.com</td><td>Mumbai</td><td>premium</td><td>1</td><td>12</td></tr>
-            <tr><td>USR_002</td><td>+918765432109</td><td>Rahul Gupta</td><td>rahul@email.com</td><td>Delhi</td><td>starter</td><td>0</td><td>3</td></tr>
-            <tr><td>USR_003</td><td>+917654321098</td><td>Meera Iyer</td><td>meera@email.com</td><td>Bangalore</td><td>premium</td><td>1</td><td>27</td></tr>
+            <tr><td>+919876543210</td><td>Priya Sharma</td><td>priya@email.com</td><td>Mumbai</td><td>premium</td><td>1</td><td>12</td></tr>
+            <tr><td>+918765432109</td><td>Rahul Gupta</td><td>rahul@email.com</td><td>Delhi</td><td>starter</td><td>0</td><td>3</td></tr>
+            <tr><td>+917654321098</td><td>Meera Iyer</td><td>meera@email.com</td><td>Bangalore</td><td>premium</td><td>1</td><td>27</td></tr>
           </tbody>
         </table>
       </div>
 
       <div style="margin-top:14px;background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:12px 14px;font-size:12px;color:#795548;">
         <strong>Rules:</strong> &nbsp;
-        <code>contact_id</code> and <code>phone</code> are required in every row. &nbsp;·&nbsp;
+        <code>phone</code> is the only required column — contact IDs are auto-generated. &nbsp;·&nbsp;
         Phone must be in E.164 format (+91XXXXXXXXXX). &nbsp;·&nbsp;
         <code>coupon_clicked</code> must be 0 or 1. &nbsp;·&nbsp;
         Max 100,000 rows per import.
@@ -1826,9 +1825,8 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
       <!-- Validation results -->
       <div id="validation-results" style="display:none;margin-top:12px;">
         <div class="validation-row val-ok" id="val-row-count">✓ 3,842 rows detected</div>
-        <div class="validation-row val-ok" id="val-row-cols">✓ Required columns found: contact_id, phone</div>
+        <div class="validation-row val-ok" id="val-row-cols">✓ Required column found: phone</div>
         <div class="validation-row val-warn" id="val-row-warn">⚠ 14 rows skipped — invalid phone format (see details)</div>
-        <div class="validation-row val-ok" id="val-row-dupes">✓ No duplicate contact_ids found</div>
       </div>
     </div>
 
@@ -5550,70 +5548,50 @@ function updatePushPreview(){
 }
 
 // ─── CSV import creates segment ───
+function downloadImportTemplate(){
+  var csv = 'phone,name,email,city,plan_type,coupon_clicked,total_orders\n' +
+    '+919876543210,Priya Sharma,priya@email.com,Mumbai,premium,1,12\n' +
+    '+918765432109,Rahul Gupta,rahul@email.com,Delhi,starter,0,3\n' +
+    '+917654321098,Meera Iyer,meera@email.com,Bangalore,premium,1,27\n';
+  var blob = new Blob([csv], {type: 'text/csv'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pingcrm_import_template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
 async function createImportedSegment(){
   var name = (document.getElementById('import-seg-name')||{}).value||'Imported Segment';
   name = name.trim() || 'Imported Segment';
   var btn = document.getElementById('import-create-btn');
   if(btn){ btn.disabled=true; btn.textContent='Importing…'; }
 
-  var totalValid   = _parsedCsvContacts.length;
-  var totalSkipped = _csvErrorRows.length;
-  var imported = 0, failed = 0;
-  var segmentId = null;
-
   try {
-    // 1. Create segment row first
-    var today = new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
-    var { data: segRow, error: segErr } = await db.from('segments').insert({
-      workspace_id: WORKSPACE,
-      name: name,
-      type: 'csv',
-      rules: { source: 'csv_import', imported_at: new Date().toISOString() },
-      contact_count: 0
-    }).select().single();
-    if(segErr) throw new Error('Segment create failed: '+segErr.message);
-    segmentId = segRow.id;
-
-    // 2. Upsert contacts in batches of 200
-    var BATCH = 200;
-    var allContactIds = [];
-    for(var i=0; i<_parsedCsvContacts.length; i+=BATCH){
-      var chunk = _parsedCsvContacts.slice(i, i+BATCH);
-      var rows = chunk.map(function(c){
-        return {
-          workspace_id: WORKSPACE,
-          phone: c.phone,
-          name: c.name || null,
-          email: c.email || null,
-          opted_out: false
-        };
-      });
-      var { data: upserted, error: upErr } = await db.from('contacts')
-        .upsert(rows, { onConflict: 'workspace_id,phone', ignoreDuplicates: false })
-        .select('id');
-      if(upErr){ failed += chunk.length; console.warn('Upsert batch error:', upErr.message); }
-      else if(upserted){ allContactIds = allContactIds.concat(upserted.map(function(r){ return r.id; })); imported += upserted.length; }
+    var resp = await fetch('/api/import-contacts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        workspace_id: WORKSPACE,
+        segment_name: name,
+        contacts: _parsedCsvContacts
+      })
+    });
+    var json = await resp.json();
+    if(json.ok){
+      var today = new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+      segments.push({ id: json.segment_id, name: name, rules: 'CSV import · '+today, count: json.imported, campaigns: 0, type: 'csv' });
+      renderSegments();
+      showToast('✓ Imported '+json.imported+' contacts into "'+name+'"');
+      go('segments');
+    } else {
+      showToast('Import failed: '+(json.error||'unknown error'));
     }
-
-    // 3. Insert segment_contacts junction in batches of 200
-    for(var j=0; j<allContactIds.length; j+=BATCH){
-      var jChunk = allContactIds.slice(j, j+BATCH);
-      var jRows = jChunk.map(function(cid){ return { segment_id: segmentId, contact_id: cid, workspace_id: WORKSPACE }; });
-      var { error: jErr } = await db.from('segment_contacts').upsert(jRows, { onConflict: 'segment_id,contact_id', ignoreDuplicates: true });
-      if(jErr) console.warn('segment_contacts batch error:', jErr.message);
-    }
-
-    // 4. Update segment contact_count
-    await db.from('segments').update({ contact_count: imported }).eq('id', segmentId);
-
-    // 5. Add to local array
-    segments.push({ id: segmentId, name: name, rules: 'CSV import · '+today, count: imported, campaigns: 0, type: 'csv' });
-    renderSegments();
-
   } catch(e){
     console.error('CSV import error:', e);
-    failed = totalValid;
-    imported = 0;
+    showToast('Network error during import: '+e.message);
   } finally {
     if(btn){ btn.disabled=false; btn.textContent='Create Segment'; }
   }
