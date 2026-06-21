@@ -4819,10 +4819,17 @@ function openEditVendor(id){
   // Try to extract what we have (may be partial — forces user to re-enter if needed)
   document.getElementById('vendor-step-title').textContent = 'Edit — '+vendor.name;
 
-  // Load full config from DB then prefill
-  db.from('vendor_connections').select('config').eq('id', id).single().then(function(res){
-    if(res.data && res.data.config) _prefillVendorCreds(vtype, res.data.config);
-  });
+  // Load full config via service-key endpoint (anon key is blocked by RLS)
+  fetch('/api/get-vendor-config?workspace_id='+WORKSPACE+'&vendor_id='+id)
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j.ok && j.config) _prefillVendorCreds(vtype, j.config);
+      if(j.sender_id){
+        var senderEl = document.getElementById('twilio-from') || document.getElementById('msg91-sender');
+        if(senderEl && !senderEl.value) senderEl.value = j.sender_id;
+      }
+    })
+    .catch(function(e){ console.warn('get-vendor-config failed:', e.message); });
 
   // Change save button to Update
   var btn = document.getElementById('vendor-save-btn');
@@ -4857,6 +4864,12 @@ async function updateVendorConn(){
   if(!_currentEditVendorId){ showToast('No vendor selected for update'); return; }
   var creds = _collectVendorCreds();
   var senderId = _getSenderId();
+  // Guard: if every credential field is empty, refuse to save (would wipe existing creds)
+  var hasAnyValue = Object.values(creds).some(function(v){ return v && v.trim && v.trim().length > 0; });
+  if(!hasAnyValue){
+    showToast('⚠ All credential fields are empty — fill in your credentials before saving');
+    return;
+  }
   var btn = document.getElementById('vendor-save-btn');
   if(btn){ btn.textContent='Updating…'; btn.disabled=true; }
   try {
