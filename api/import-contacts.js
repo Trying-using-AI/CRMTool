@@ -59,8 +59,9 @@ module.exports = async function handler(req, res) {
       .select('id');
 
     if (upErr) {
-      console.error('contacts upsert batch error:', upErr.message);
-      failed += chunk.length;
+      console.error('contacts upsert batch error:', upErr.message, upErr.code, upErr.details, upErr.hint);
+      // Return first batch error immediately so we can diagnose
+      return res.status(200).json({ ok: false, error: upErr.message, code: upErr.code, hint: upErr.hint, details: upErr.details });
     } else if (upserted) {
       upserted.forEach(function(r) { allContactIds.push(r.id); });
       imported += upserted.length;
