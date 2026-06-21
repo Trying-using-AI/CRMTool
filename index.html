@@ -2589,6 +2589,9 @@ ping(<span class="code-str">'track'</span>, <span class="code-str">'coupon_click
     <div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;line-height:1.5;">
       <strong>Message:</strong><br><span id="test-msg-preview">—</span>
     </div>
+    <div id="wa-sandbox-hint" style="display:none;margin-top:10px;padding:8px 12px;border-radius:6px;background:#fff8e1;border:1px solid #ffe082;font-size:12px;color:#7a5c00;line-height:1.5;">
+      ⚠️ <strong>WhatsApp Sandbox:</strong> You must send any message to <strong>+14155238886</strong> on WhatsApp first to open a 24-hour session window, otherwise messages will not be delivered.
+    </div>
     <div id="test-result-box" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;"></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeTestModal()">Cancel</button>
@@ -3661,6 +3664,8 @@ function openTestModal(){
     ? 'Sends a real WhatsApp message via '+vendorLabel+'. Not tracked in analytics.'
     : 'Sends a real SMS via '+vendorLabel+'. Uses actual credits.';
   document.getElementById('test-result-box').style.display='none';
+  var hint = document.getElementById('wa-sandbox-hint');
+  if(hint) hint.style.display = _wizardChannel === 'WhatsApp' ? 'block' : 'none';
   var btn = document.getElementById('send-test-btn');
   if(btn){ btn.style.display=''; btn.textContent='Send Test'; btn.disabled=false; }
   document.getElementById('test-modal').classList.add('open');

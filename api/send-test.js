@@ -58,17 +58,32 @@ async function sendViaTwilioWA(cfg, toPhone, body) {
   const to = 'whatsapp:+' + toPhone.replace(/^\+/, '').replace(/\D/g, '');
   const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
 
+  const auth = 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
   const resp = await fetch(url, {
     method: 'POST',
-    headers: {
-      Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
+    headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ From: from, To: to, Body: body }).toString()
   });
   const json = await resp.json();
-  if (json.sid) return { success: true, sid: json.sid, to, from };
-  return { success: false, error: json.message || `Twilio error ${resp.status}`, detail: json };
+  if (!json.sid) return { success: false, error: json.message || `Twilio error ${resp.status}` };
+
+  // Poll delivery status after 4 s — catches sandbox session-expired (63016) immediately
+  await new Promise(r => setTimeout(r, 4000));
+  const statusResp = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages/${json.sid}.json`,
+    { headers: { Authorization: auth } }
+  );
+  const status = await statusResp.json();
+  if (status.error_code === 63016) {
+    return {
+      success: false,
+      error: 'WhatsApp session expired. Open WhatsApp and send any message to +14155238886 first, then retry the test. (Twilio Sandbox requires an active session within 24 hours.)'
+    };
+  }
+  if (status.status === 'undelivered' || status.status === 'failed') {
+    return { success: false, error: `Message undelivered (Twilio error ${status.error_code || 'unknown'}). Check that ${to} has joined the sandbox.` };
+  }
+  return { success: true, sid: json.sid, to, from };
 }
 
 async function sendViaTwilioSMS(cfg, toPhone, body) {
