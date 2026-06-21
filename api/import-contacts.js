@@ -118,5 +118,5 @@ module.exports = async function handler(req, res) {
   // 4. Update segment contact_count
   await db.from('segments').update({ contact_count: imported }).eq('id', segmentId);
 
-  return res.status(200).json({ ok: true, segment_id: segmentId, imported, failed });
+  return res.status(200).json({ ok: true, segment_id: segmentId, imported });
 };
