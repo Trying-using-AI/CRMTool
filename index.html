@@ -130,6 +130,7 @@ async function loadFromSupabase(){
     renderCampaigns();
     renderDashboard();
     renderSegments();
+    renderWizardAudience();
     renderRules();
     renderVendorDropdown();
     renderVendorCards();
@@ -820,27 +821,10 @@ button:focus-visible,a:focus-visible{outline:2px solid #0d9488;outline-offset:3p
     </div>
 
     <div id="mode-segment">
-      <div class="seg-list">
-        <div class="seg-row selected" id="seg-mumbai" onclick="pickSeg('seg-mumbai','Mumbai Coupon Clickers','4,212')">
-          <div><div class="seg-name">Mumbai Coupon Clickers</div><div class="seg-meta">city = Mumbai · coupon_clicked = 1</div></div>
-          <div style="display:flex;align-items:center;gap:12px;"><div class="seg-count">4,212</div><div class="radio-circle"></div></div>
-        </div>
-        <div class="seg-row" id="seg-hv" onclick="pickSeg('seg-hv','High-Value Users','8,930')">
-          <div><div class="seg-name">High-Value Users</div><div class="seg-meta">total_orders ≥ 5 · plan = premium</div></div>
-          <div style="display:flex;align-items:center;gap:12px;"><div class="seg-count">8,930</div><div class="radio-circle"></div></div>
-        </div>
-        <div class="seg-row" id="seg-inactive" onclick="pickSeg('seg-inactive','Inactive 30+ Days','11,004')">
-          <div><div class="seg-name">Inactive 30+ Days</div><div class="seg-meta">last_seen > 30 days · never_purchased = 0</div></div>
-          <div style="display:flex;align-items:center;gap:12px;"><div class="seg-count">11,004</div><div class="radio-circle"></div></div>
-        </div>
-        <div class="seg-row" id="seg-new" onclick="pickSeg('seg-new','New Signups This Week','622')">
-          <div><div class="seg-name">New Signups This Week</div><div class="seg-meta">created_at within last 7 days</div></div>
-          <div style="display:flex;align-items:center;gap:12px;"><div class="seg-count">622</div><div class="radio-circle"></div></div>
-        </div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div class="seg-list" id="wizard-seg-list" style="min-height:60px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
         <button class="btn-link" onclick="go('segmentation')">+ Create new segment →</button>
-        <div id="seg-count-label" style="font-size:13px;color:#888;">4,212 users will receive this</div>
+        <div id="seg-count-label" style="font-size:13px;color:#888;">— select a segment —</div>
       </div>
     </div>
 
@@ -3313,9 +3297,11 @@ function syncReviewPreview(){
 function startWizard(){
   currentCampId = null;
   variantBAdded = false;
+  _selectedSegId = null; _selectedSegName = ''; _selectedSegCount = 0;
   document.getElementById('w-header-title').textContent = 'New Campaign';
   document.getElementById('camp-name-input').value = '';
   resetVariantB();
+  renderWizardAudience();
   go('wizard-1');
 }
 
@@ -3572,10 +3558,52 @@ function setAudienceMode(m){
   document.getElementById('mode-segment').style.display=m==='segment'?'block':'none';
   document.getElementById('mode-event').style.display=m==='event'?'block':'none';
 }
-function pickSeg(id,name,count){
-  document.querySelectorAll('.seg-row').forEach(function(r){r.classList.remove('selected');});
-  document.getElementById(id).classList.add('selected');
-  document.getElementById('seg-count-label').textContent = count+' users will receive this';
+var _selectedSegId = null;
+var _selectedSegName = '';
+var _selectedSegCount = 0;
+
+function pickSeg(domId, name, count, segDbId){
+  document.querySelectorAll('#wizard-seg-list .seg-row').forEach(function(r){r.classList.remove('selected');});
+  var el = document.getElementById(domId);
+  if(el) el.classList.add('selected');
+  _selectedSegId   = segDbId || null;
+  _selectedSegName = name || '';
+  _selectedSegCount = typeof count === 'number' ? count : parseInt(String(count).replace(/,/g,'')) || 0;
+  document.getElementById('seg-count-label').textContent = _selectedSegCount.toLocaleString()+' users will receive this';
+  var rc = document.getElementById('w3-recipient-count');
+  if(rc) rc.textContent = _selectedSegCount.toLocaleString();
+}
+
+function renderWizardAudience(){
+  var list = document.getElementById('wizard-seg-list');
+  if(!list) return;
+  if(!segments || segments.length === 0){
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;">No segments yet. <button class="btn-link" onclick="go(\'segmentation\')">Create one →</button></div>';
+    return;
+  }
+  list.innerHTML = segments.map(function(s){
+    var domId = 'wseg-' + s.id;
+    var isSelected = s.id === _selectedSegId;
+    var badge = s.type === 'csv'
+      ? '<span style="font-size:10px;background:#e8f4fd;color:#3b82f6;padding:1px 6px;border-radius:20px;margin-left:6px;font-weight:600;">CSV</span>'
+      : '';
+    return '<div class="seg-row'+(isSelected?' selected':'')+'" id="'+domId+
+      '" onclick="pickSeg(\''+domId+'\',\''+s.name.replace(/\\/g,'\\\\').replace(/'/g,'\\\'')+'\',' +
+      s.count+',\''+s.id+'\')">' +
+      '<div><div class="seg-name">'+s.name+badge+'</div><div class="seg-meta">'+s.rules+'</div></div>'+
+      '<div style="display:flex;align-items:center;gap:12px;"><div class="seg-count">'+(s.count||0).toLocaleString()+'</div><div class="radio-circle"></div></div>'+
+    '</div>';
+  }).join('');
+  // Auto-select: keep current selection if still in list, else pick first
+  var stillExists = _selectedSegId && segments.find(function(s){return s.id===_selectedSegId;});
+  if(!stillExists && segments.length > 0){
+    var first = segments[0];
+    pickSeg('wseg-'+first.id, first.name, first.count, first.id);
+  } else if(stillExists){
+    // Refresh radio highlight without changing vars
+    var el = document.getElementById('wseg-'+_selectedSegId);
+    if(el) el.classList.add('selected');
+  }
 }
 
 // ─── Schedule ───
@@ -3830,7 +3858,7 @@ async function sendCampaign(){
   }
   var newCamp = {
     id:'__pending__', name:name,
-    meta:'Segment: All Users · Sending now',
+    meta: _selectedSegName ? 'Segment: '+_selectedSegName : 'Sending now',
     channel:ch, status:'sending',
     sent:'0', delivered:'0', delRate:'—', ctr:'—'
   };
@@ -3840,18 +3868,34 @@ async function sendCampaign(){
 
   // 1. Persist campaign row to Supabase
   var campaignId = null;
+  // Read schedule
+  var schedNow = document.getElementById('sched-now');
+  var isScheduled = schedNow && !schedNow.classList.contains('selected');
+  var scheduledAt = null;
+  if(isScheduled){
+    var dateInput = document.querySelector('#dt-picker input[type="date"]');
+    var timeInput = document.querySelector('#dt-picker input[type="time"]');
+    if(dateInput && timeInput && dateInput.value && timeInput.value){
+      // IST = UTC+5:30
+      scheduledAt = new Date(dateInput.value + 'T' + timeInput.value + ':00+05:30').toISOString();
+    }
+  }
   try {
-    var segId = (document.getElementById('audience-segment-select')||{}).value || null;
+    var segId = _selectedSegId || null;
     var vendorId = _wizardSelectedVendorId || null;
+    var campMeta = _selectedSegName
+      ? 'Segment: '+_selectedSegName+' · '+(isScheduled && scheduledAt ? 'Scheduled' : 'Sending now')
+      : (isScheduled && scheduledAt ? 'Scheduled' : 'Sending now');
     var { data: row, error } = await db.from('campaigns').insert({
       workspace_id: WORKSPACE,
       name: name,
       channel: ch,
-      status: 'sending',
+      status: (isScheduled && scheduledAt) ? 'scheduled' : 'sending',
       message_a: msgA,
-      meta: newCamp.meta,
+      meta: campMeta,
       segment_id: segId,
       vendor_id: vendorId,
+      scheduled_at: scheduledAt,
       sent: 0, delivered: 0, clicked: 0, failed: 0
     }).select().single();
     if(!error && row){
@@ -3861,8 +3905,8 @@ async function sendCampaign(){
     }
   } catch(e){ console.warn('Campaign insert failed', e); }
 
-  // 2. Trigger actual send via backend API
-  if(campaignId){
+  // 2. Trigger actual send (skip for scheduled — cron will fire it later)
+  if(campaignId && !(isScheduled && scheduledAt)){
     try {
       var resp = await fetch('/api/send-campaign', {
         method: 'POST',
@@ -3871,21 +3915,28 @@ async function sendCampaign(){
       });
       var result = await resp.json();
       if(result.ok){
-        // Update local state with real send results
-        newCamp.sent      = (result.sent||0).toLocaleString();
-        newCamp.status    = 'completed';
+        newCamp.sent   = (result.sent||0).toLocaleString();
+        newCamp.status = 'completed';
         var skipped = (result.skipped_cap||0) + (result.skipped_dnd||0);
         var bodyMsg = '"'+name+'" sent to '+result.sent.toLocaleString()+' users.';
         if(skipped) bodyMsg += ' '+skipped+' skipped (frequency cap / DND).';
         if(result.failed) bodyMsg += ' '+result.failed+' failed.';
         document.getElementById('sent-modal-body').textContent = bodyMsg;
       } else {
-        document.getElementById('sent-modal-body').textContent = '"'+name+'" queued. Check campaigns screen for delivery status.';
+        document.getElementById('sent-modal-body').textContent = (result.error || 'Send failed — check campaigns screen.');
       }
     } catch(e){
       console.warn('Send API call failed:', e);
       document.getElementById('sent-modal-body').textContent = '"'+name+'" saved. Send API unreachable — check Vercel env vars.';
     }
+  } else if(isScheduled && scheduledAt && campaignId){
+    newCamp.status = 'scheduled';
+    var schedModal = document.getElementById('sent-modal');
+    schedModal.querySelector('.success-icon').textContent = '🕐';
+    schedModal.querySelector('.modal-title').textContent  = 'Campaign Scheduled!';
+    document.getElementById('sent-modal-btn').textContent = 'View All Campaigns';
+    var when = new Date(scheduledAt).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+    document.getElementById('sent-modal-body').textContent = '"'+name+'" will send to '+_selectedSegCount.toLocaleString()+' users at '+when+' IST.';
   } else {
     document.getElementById('sent-modal-body').textContent = '"'+name+'" queued. DB write failed — check Supabase connection.';
   }
