@@ -37,35 +37,57 @@ module.exports = async function handler(req, res) {
   if (segErr) return res.status(500).json({ error: 'Segment create failed: ' + segErr.message });
   const segmentId = segRow.id;
 
-  // 2. Upsert contacts in batches and collect their IDs
-  let imported = 0, failed = 0;
+  // 2. Insert contacts in batches — SELECT existing phones first to avoid
+  //    duplicate inserts without needing a unique constraint in the schema.
+  let imported = 0;
   const allContactIds = [];
 
   for (let i = 0; i < contacts.length; i += BATCH) {
     const chunk = contacts.slice(i, i + BATCH);
-    const rows = chunk.map(function(c) {
-      return {
-        workspace_id,
-        phone: c.phone,
-        name:  c.name  || null,
-        email: c.email || null,
-        opted_out: false
-      };
-    });
+    const phones = chunk.map(function(c) { return c.phone; });
 
-    const { data: upserted, error: upErr } = await db
+    // Find which phones already exist
+    const { data: existing } = await db
       .from('contacts')
-      .upsert(rows, { onConflict: 'workspace_id,phone', ignoreDuplicates: false })
-      .select('id');
+      .select('id, phone')
+      .eq('workspace_id', workspace_id)
+      .in('phone', phones);
 
-    if (upErr) {
-      console.error('contacts upsert batch error:', upErr.message, upErr.code, upErr.details, upErr.hint);
-      // Return first batch error immediately so we can diagnose
-      return res.status(200).json({ ok: false, error: upErr.message, code: upErr.code, hint: upErr.hint, details: upErr.details });
-    } else if (upserted) {
-      upserted.forEach(function(r) { allContactIds.push(r.id); });
-      imported += upserted.length;
+    const existingMap = {};
+    (existing || []).forEach(function(c) { existingMap[c.phone] = c.id; });
+
+    // Collect IDs of already-existing contacts
+    (existing || []).forEach(function(c) { allContactIds.push(c.id); });
+
+    // Insert only new contacts
+    const newRows = chunk
+      .filter(function(c) { return !existingMap[c.phone]; })
+      .map(function(c) {
+        return {
+          workspace_id,
+          phone: c.phone,
+          name:  c.name  || null,
+          email: c.email || null,
+          opted_out: false
+        };
+      });
+
+    if (newRows.length > 0) {
+      const { data: inserted, error: insErr } = await db
+        .from('contacts')
+        .insert(newRows)
+        .select('id');
+
+      if (insErr) {
+        console.error('contacts insert error:', insErr.message, insErr.code);
+        return res.status(200).json({ ok: false, error: insErr.message, code: insErr.code, hint: insErr.hint });
+      }
+      if (inserted) {
+        inserted.forEach(function(r) { allContactIds.push(r.id); });
+      }
     }
+
+    imported += (existing || []).length + newRows.length;
   }
 
   // 3. Link contacts to segment
